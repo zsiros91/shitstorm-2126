@@ -1,13 +1,19 @@
 mod arena;
 mod assets;
+mod build;
 mod camera;
 mod collision;
 mod combat;
 mod debug;
+mod economy;
 mod enemy;
 mod fx;
+mod healthbar;
+mod hq;
 mod player;
+mod power;
 mod states;
+mod tower;
 mod ui;
 mod waves;
 
@@ -24,7 +30,7 @@ fn main() {
     }
 
     App::new()
-        .insert_resource(ClearColor(Color::srgb(0.07, 0.08, 0.09)))
+        .insert_resource(ClearColor(Color::srgb(0.012, 0.02, 0.03)))
         .add_plugins(
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
@@ -56,8 +62,16 @@ fn main() {
             fx::FxPlugin,
             camera::CameraPlugin,
             arena::ArenaPlugin,
+            hq::HqPlugin,
+            power::PowerPlugin,
+            healthbar::HealthBarPlugin,
+            economy::EconomyPlugin,
+        ))
+        .add_plugins((
             player::PlayerPlugin,
             enemy::EnemyPlugin,
+            tower::TowerPlugin,
+            build::BuildPlugin,
             combat::CombatPlugin,
             waves::WavesPlugin,
             ui::UiPlugin,

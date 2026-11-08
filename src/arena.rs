@@ -5,9 +5,13 @@ use crate::collision::{Collider, StaticCollider};
 use crate::states::GameState;
 
 pub const TILE_SIZE: f32 = 64.0;
+pub const PLAYER_SPAWN: Vec2 = Vec2::new(0.0, -300.0);
 
 #[derive(Component)]
 pub struct Tile;
+
+#[derive(Component)]
+pub struct GroundDecal;
 
 #[derive(Resource)]
 pub struct Arena {
@@ -34,28 +38,47 @@ impl Plugin for ArenaPlugin {
 pub fn random_edge_point(arena: &Arena, margin: f32) -> Vec2 {
     let half = arena.half - Vec2::splat(margin);
     match fastrand::u32(0..4) {
-        0 => Vec2::new(
-            fastrand::f32() * half.x * 2.0 - half.x,
-            half.y,
-        ),
-        1 => Vec2::new(
-            fastrand::f32() * half.x * 2.0 - half.x,
-            -half.y,
-        ),
-        2 => Vec2::new(
-            -half.x,
-            fastrand::f32() * half.y * 2.0 - half.y,
-        ),
-        _ => Vec2::new(
-            half.x,
-            fastrand::f32() * half.y * 2.0 - half.y,
-        ),
+        0 => Vec2::new(fastrand::f32() * half.x * 2.0 - half.x, half.y),
+        1 => Vec2::new(fastrand::f32() * half.x * 2.0 - half.x, -half.y),
+        2 => Vec2::new(-half.x, fastrand::f32() * half.y * 2.0 - half.y),
+        _ => Vec2::new(half.x, fastrand::f32() * half.y * 2.0 - half.y),
     }
 }
 
+fn spawn_shadow(
+    commands: &mut Commands,
+    assets: &GameAssets,
+    position: Vec2,
+    size: Vec2,
+    z: f32,
+) {
+    commands.spawn((
+        Sprite {
+            image: assets.shadow.clone(),
+            custom_size: Some(size),
+            color: Color::srgba(1.0, 1.0, 1.0, 0.55),
+            ..default()
+        },
+        Transform::from_xyz(position.x + 8.0, position.y - 10.0, z),
+        DespawnOnExit(GameState::Playing),
+    ));
+}
+
 fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>, arena: Res<Arena>) {
-    let columns = (arena.half.x * 2.0 / TILE_SIZE) as i32;
-    let rows = (arena.half.y * 2.0 / TILE_SIZE) as i32;
+    let columns = (arena.half.x * 2.0 / TILE_SIZE).round() as i32;
+    let rows = (arena.half.y * 2.0 / TILE_SIZE).round() as i32;
+
+    // Landing pad under the command centre.
+    commands.spawn((
+        Sprite {
+            image: assets.base_pad.clone(),
+            custom_size: Some(Vec2::splat(620.0)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, -12.0),
+        GroundDecal,
+        DespawnOnExit(GameState::Playing),
+    ));
 
     for ix in 0..columns {
         for iy in 0..rows {
@@ -64,24 +87,49 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>, arena: Res<Arena
                 -arena.half.y + TILE_SIZE * 0.5 + iy as f32 * TILE_SIZE,
             );
 
-            let sandy = (ix / 4 + iy / 3) % 7 == 0;
-            let variant = if sandy {
-                2 + fastrand::u32(0..2) as usize
-            } else {
-                fastrand::u32(0..2) as usize
-            };
+            let dist = position.length() / arena.half.length();
+            let edge = ix.min(iy).min(columns - 1 - ix).min(rows - 1 - iy);
+            let noise = fastrand::f32();
 
-            let tint = match variant {
-                0 => Color::srgb(1.0, 0.4, 0.4),
-                1 => Color::srgb(0.4, 1.0, 0.4),
-                2 => Color::srgb(0.4, 0.6, 1.0),
-                _ => Color::srgb(1.0, 1.0, 0.4),
+            let (image, tint) = if edge <= 1 {
+                let rock = fastrand::u32(0..2) as usize;
+                (
+                    assets.tiles_rock[rock].clone(),
+                    Color::srgb(0.72, 0.72, 0.74),
+                )
+            } else if edge == 2 && noise < 0.55 {
+                let creep = fastrand::u32(0..2) as usize;
+                (
+                    assets.tiles_creep[creep].clone(),
+                    Color::srgb(0.78, 0.68, 0.9),
+                )
+            } else if dist < 0.22 {
+                let pick = fastrand::f32();
+                if pick < 0.12 {
+                    (assets.tile_grate.clone(), Color::WHITE)
+                } else if pick < 0.18 {
+                    (assets.tile_rust.clone(), Color::srgb(0.9, 0.82, 0.75))
+                } else {
+                    let idx = fastrand::u32(0..3) as usize;
+                    (assets.tiles_metal[idx].clone(), Color::srgb(0.92, 0.96, 1.0))
+                }
+            } else if noise < 0.18 + dist * 0.25 {
+                (
+                    assets.tile_rust.clone(),
+                    Color::srgb(0.85, 0.78, 0.72),
+                )
+            } else {
+                let idx = fastrand::u32(0..3) as usize;
+                (
+                    assets.tiles_metal[idx].clone(),
+                    Color::srgb(0.72, 0.78, 0.84),
+                )
             };
 
             commands.spawn((
                 Sprite {
-                    image: assets.tiles[variant].clone(),
-                    custom_size: Some(Vec2::splat(TILE_SIZE)),
+                    image,
+                    custom_size: Some(Vec2::splat(TILE_SIZE + 1.0)),
                     color: tint,
                     ..default()
                 },
@@ -93,39 +141,58 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>, arena: Res<Arena
     }
 
     for &(kind, x, y) in PROPS {
-        let (image, size, collider) = match kind {
+        let (image, size, collider, shadow_size) = match kind {
             0 => (
-                assets.crate_wood.clone(),
-                Vec2::splat(56.0),
-                Collider::aabb(Vec2::splat(26.0)),
+                assets.crate_metal.clone(),
+                Vec2::splat(52.0),
+                Collider::aabb(Vec2::splat(23.0)),
+                Vec2::splat(54.0),
             ),
             1 => (
-                assets.crate_metal.clone(),
-                Vec2::splat(56.0),
-                Collider::aabb(Vec2::splat(26.0)),
+                assets.crate_wood.clone(),
+                Vec2::splat(52.0),
+                Collider::aabb(Vec2::splat(23.0)),
+                Vec2::splat(54.0),
             ),
             2 => (
                 assets.barrel_green.clone(),
-                Vec2::splat(40.0),
-                Collider::circle(16.0),
+                Vec2::splat(38.0),
+                Collider::circle(15.0),
+                Vec2::splat(42.0),
             ),
             3 => (
                 assets.barrel_red.clone(),
-                Vec2::splat(40.0),
-                Collider::circle(16.0),
+                Vec2::splat(38.0),
+                Collider::circle(15.0),
+                Vec2::splat(42.0),
             ),
             4 => (
-                assets.tree.clone(),
-                Vec2::splat(96.0),
-                Collider::circle(20.0),
+                assets.rock.clone(),
+                Vec2::splat(86.0),
+                Collider::circle(27.0),
+                Vec2::splat(82.0),
+            ),
+            5 => (
+                assets.sandbag.clone(),
+                Vec2::new(72.0, 32.0),
+                Collider::aabb(Vec2::new(32.0, 13.0)),
+                Vec2::new(76.0, 34.0),
+            ),
+            6 => (
+                assets.pipe.clone(),
+                Vec2::new(150.0, 56.0),
+                Collider::aabb(Vec2::new(70.0, 18.0)),
+                Vec2::new(150.0, 36.0),
             ),
             _ => (
-                assets.sandbag.clone(),
-                Vec2::new(64.0, 28.0),
-                Collider::aabb(Vec2::new(30.0, 12.0)),
+                assets.crate_metal.clone(),
+                Vec2::splat(52.0),
+                Collider::aabb(Vec2::splat(23.0)),
+                Vec2::splat(54.0),
             ),
         };
 
+        spawn_shadow(&mut commands, &assets, Vec2::new(x, y), shadow_size, 1.0);
         commands.spawn((
             Sprite {
                 image,
@@ -137,20 +204,52 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>, arena: Res<Arena
             DespawnOnExit(GameState::Playing),
         ));
     }
+
+    // Scorch marks and zerg growth around the perimeter.
+    for _ in 0..18 {
+        let position = Vec2::new(
+            fastrand::f32() * arena.half.x * 2.0 - arena.half.x,
+            fastrand::f32() * arena.half.y * 2.0 - arena.half.y,
+        );
+        if position.length() < 520.0 {
+            continue;
+        }
+        let creep = fastrand::f32() < 0.35;
+        commands.spawn((
+            Sprite {
+                image: if creep {
+                    assets.creep_decal.clone()
+                } else {
+                    assets.scorch.clone()
+                },
+                custom_size: Some(Vec2::splat(if creep { 230.0 } else { 120.0 })),
+                color: Color::srgba(1.0, 1.0, 1.0, if creep { 0.55 } else { 0.8 }),
+                ..default()
+            },
+            Transform::from_xyz(position.x, position.y, -8.5)
+                .with_rotation(Quat::from_rotation_z(fastrand::f32() * std::f32::consts::TAU)),
+            GroundDecal,
+            DespawnOnExit(GameState::Playing),
+        ));
+    }
 }
 
 const PROPS: &[(u8, f32, f32)] = &[
-    (0, -900.0, 500.0),
-    (0, -820.0, 560.0),
-    (1, 700.0, -450.0),
-    (1, 760.0, -390.0),
-    (2, -500.0, -600.0),
-    (3, -440.0, -640.0),
-    (2, 950.0, 520.0),
-    (3, 1010.0, 470.0),
-    (4, -1100.0, -200.0),
-    (4, 1100.0, 250.0),
-    (4, 150.0, 700.0),
-    (5, -200.0, -700.0),
-    (5, 400.0, 620.0),
+    (0, -880.0, 470.0),
+    (0, -810.0, 520.0),
+    (1, 760.0, -430.0),
+    (1, 820.0, -370.0),
+    (2, -480.0, -610.0),
+    (3, -420.0, -650.0),
+    (2, 930.0, 500.0),
+    (3, 990.0, 450.0),
+    (4, -1110.0, -180.0),
+    (4, 1090.0, 280.0),
+    (4, 180.0, 700.0),
+    (5, -340.0, -700.0),
+    (5, 440.0, 600.0),
+    (6, -1050.0, 260.0),
+    (6, 700.0, 120.0),
+    (4, -700.0, 700.0),
+    (4, 1050.0, -650.0),
 ];

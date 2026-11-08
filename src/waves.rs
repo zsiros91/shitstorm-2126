@@ -3,11 +3,12 @@ use bevy::prelude::*;
 use crate::arena::{random_edge_point, Arena};
 use crate::assets::GameAssets;
 use crate::combat::EnemyKilled;
+use crate::economy::Economy;
 use crate::enemy::{spawn_enemy, Enemy, EnemyKind};
 use crate::player::{Player, Repair};
 use crate::states::{gameplay_active, GameSet, GameState};
 
-const MAX_ALIVE: usize = 150;
+const MAX_ALIVE: usize = 120;
 
 #[derive(Clone, Copy, Debug)]
 pub enum WavePhase {
@@ -22,6 +23,7 @@ pub struct WaveManager {
     pub phase: WavePhase,
     pub remaining_to_spawn: u32,
     pub spawn_timer: f32,
+    pub total_in_wave: u32,
 }
 
 #[derive(Resource, Default)]
@@ -51,9 +53,10 @@ impl Plugin for WavesPlugin {
 fn start_waves(mut commands: Commands) {
     commands.insert_resource(WaveManager {
         wave: 1,
-        phase: WavePhase::Countdown(3.0),
+        phase: WavePhase::Countdown(5.0),
         remaining_to_spawn: 0,
         spawn_timer: 0.0,
+        total_in_wave: 0,
     });
 }
 
@@ -61,9 +64,15 @@ fn reset_score(mut score: ResMut<Score>) {
     score.value = 0;
 }
 
-fn track_score(mut kills: MessageReader<EnemyKilled>, mut score: ResMut<Score>) {
+fn track_score(
+    mut kills: MessageReader<EnemyKilled>,
+    mut score: ResMut<Score>,
+    mut economy: ResMut<Economy>,
+) {
     for kill in kills.read() {
         score.value += kill.score;
+        economy.minerals += kill.minerals;
+        economy.gas += kill.gas;
     }
 }
 
@@ -73,6 +82,7 @@ fn wave_director(
     assets: Res<GameAssets>,
     arena: Res<Arena>,
     mut waves: ResMut<WaveManager>,
+    mut economy: ResMut<Economy>,
     enemies: Query<&Enemy>,
     mut player: Query<&mut Repair, With<Player>>,
 ) {
@@ -84,7 +94,8 @@ fn wave_director(
         WavePhase::Countdown(timer) => {
             let timer = timer - dt;
             if timer <= 0.0 {
-                waves.remaining_to_spawn = 8 + waves.wave * 5;
+                waves.remaining_to_spawn = 10 + waves.wave * 5;
+                waves.total_in_wave = waves.remaining_to_spawn;
                 waves.spawn_timer = 0.0;
                 waves.phase = WavePhase::Spawning;
             } else {
@@ -104,7 +115,7 @@ fn wave_director(
                 spawn_enemy(&mut commands, &assets, kind, position, waves.wave);
                 waves.remaining_to_spawn -= 1;
                 projected += 1;
-                let interval = (0.9 - 0.05 * waves.wave as f32).max(0.16);
+                let interval = (0.85 - 0.045 * waves.wave as f32).max(0.18);
                 waves.spawn_timer += interval;
             }
         }
@@ -119,18 +130,20 @@ fn wave_director(
         if let Ok(mut repair) = player.single_mut() {
             repair.charges = repair.max_charges;
         }
+        economy.minerals += 45 + waves.wave * 8;
+        economy.gas += 8 + waves.wave / 2;
         waves.wave += 1;
-        waves.phase = WavePhase::Countdown(5.0);
+        waves.phase = WavePhase::Countdown(6.0);
     }
 }
 
 fn pick_kind(wave: u32) -> EnemyKind {
     let roll = fastrand::f32();
-    if wave >= 5 && roll < (0.10 + wave as f32 * 0.005).min(0.22) {
-        EnemyKind::Brute
-    } else if wave >= 3 && roll < 0.35 {
-        EnemyKind::Runner
+    if wave >= 4 && roll < (0.07 + wave as f32 * 0.006).min(0.18) {
+        EnemyKind::Ultralisk
+    } else if wave >= 2 && roll < 0.38 {
+        EnemyKind::Hydralisk
     } else {
-        EnemyKind::Walker
+        EnemyKind::Zergling
     }
 }

@@ -3,7 +3,7 @@ use bevy::math::Isometry2d;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 
-use crate::arena::{Arena, Tile};
+use crate::arena::Arena;
 use crate::assets::GameAssets;
 use crate::collision::{Collider, StaticCollider};
 use crate::enemy::{spawn_enemy, Enemy, EnemyKind};
@@ -16,6 +16,8 @@ pub struct DebugFlags {
     pub show_colliders: bool,
     pub god_mode: bool,
     pub slow_mo: bool,
+    pub auto_start: bool,
+    pub screenshot: Option<(String, f32)>,
 }
 
 pub struct DebugPlugin;
@@ -23,12 +25,24 @@ pub struct DebugPlugin;
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugFlags>()
-            .add_systems(Update, auto_start)
+            .add_systems(Startup, read_env_flags)
+            .add_systems(Update, auto_start.run_if(in_state(GameState::Menu)))
             .add_systems(
                 Update,
                 (debug_keys, debug_draw, debug_status, auto_screenshot)
                     .run_if(in_state(GameState::Playing)),
             );
+    }
+}
+
+fn read_env_flags(mut flags: ResMut<DebugFlags>) {
+    flags.auto_start = std::env::var("SHITSTORM_AUTOSTART").is_ok();
+    if let Ok(path) = std::env::var("SHITSTORM_SCREENSHOT") {
+        let delay = std::env::var("SHITSTORM_SCREENSHOT_DELAY")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(5.0);
+        flags.screenshot = Some((path, delay));
     }
 }
 
@@ -59,9 +73,9 @@ fn debug_keys(
                     + Vec2::from_angle(angle) * distance)
                     .clamp(-limit, limit);
                 let kind = match fastrand::u32(0..3) {
-                    0 => EnemyKind::Walker,
-                    1 => EnemyKind::Runner,
-                    _ => EnemyKind::Brute,
+                    0 => EnemyKind::Zergling,
+                    1 => EnemyKind::Hydralisk,
+                    _ => EnemyKind::Ultralisk,
                 };
                 spawn_enemy(&mut commands, &assets, kind, position, wave);
             }
@@ -81,6 +95,7 @@ fn debug_keys(
 
     if keys.just_pressed(KeyCode::F5) {
         flags.god_mode = !flags.god_mode;
+        info!("god_mode={}", flags.god_mode);
     }
 
     if keys.just_pressed(KeyCode::F6) {
@@ -96,18 +111,25 @@ fn debug_keys(
     if keys.just_pressed(KeyCode::F7) {
         next_state.set(GameState::GameOver);
     }
+
+    if keys.just_pressed(KeyCode::F12) {
+        let path = std::env::var("SHITSTORM_SCREENSHOT")
+            .unwrap_or_else(|_| "/tmp/opencode/bevy_shot.png".to_string());
+        info!("saving screenshot to {path}");
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(path));
+    }
 }
 
 fn debug_status(
     time: Res<Time>,
     mut timer: Local<f32>,
     player: Query<&Transform, With<Player>>,
-    camera: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    projection: Query<&Projection, With<Camera2d>>,
-    tiles: Query<&Transform, With<Tile>>,
-    assets: Res<GameAssets>,
+    enemies: Query<&Enemy>,
+    towers: Query<&crate::tower::Tower>,
     images: Res<Assets<Image>>,
-    server: Res<AssetServer>,
+    assets: Res<GameAssets>,
 ) {
     *timer += time.delta_secs();
     if *timer < 2.0 {
@@ -115,67 +137,32 @@ fn debug_status(
     }
     *timer = 0.0;
 
-    info!("player={:?}", player.single().map(|t| t.translation));
-    info!("camera={:?}", camera.single().map(|(_, t)| t.translation()));
-    info!("tiles={}", tiles.iter().count());
-
-    let tile_loaded: Vec<bool> = assets
-        .tiles
-        .iter()
-        .map(|handle| images.get(handle).is_some())
-        .collect();
-    let tile_states: Vec<Option<bevy::asset::LoadState>> = assets
-        .tiles
-        .iter()
-        .map(|handle| server.get_load_state(handle))
-        .collect();
-    let tile_sizes: Vec<Option<UVec2>> = assets
-        .tiles
-        .iter()
-        .map(|handle| images.get(handle).map(|image| image.size()))
-        .collect();
-    info!("tile_loaded={:?}", tile_loaded);
-    info!("tile_states={:?}", tile_states);
-    info!("tile_sizes={:?}", tile_sizes);
+    let player_position = player
+        .single()
+        .map(|transform| transform.translation)
+        .unwrap_or(Vec3::ZERO);
     info!(
-        "hull_loaded={:?} turret_loaded={:?} bullet_loaded={:?}",
-        images.get(&assets.player_hull).map(|image| image.size()),
-        images.get(&assets.player_turret).map(|image| image.size()),
-        images.get(&assets.bullet).map(|image| image.size()),
+        "player={:?} enemies={} towers={} sprites_ready={}",
+        player_position,
+        enemies.iter().count(),
+        towers.iter().count(),
+        images.get(&assets.player_torso).is_some()
     );
-
-    if let (Ok(player_transform), Ok((camera, camera_transform))) =
-        (player.single(), camera.single())
-    {
-        let ndc = camera.world_to_ndc(camera_transform, player_transform.translation);
-        let viewport = camera
-            .world_to_viewport(camera_transform, player_transform.translation)
-            .ok();
-        info!("player_ndc={:?} player_viewport={:?}", ndc, viewport);
-    }
-
-    if let Ok(projection) = projection.single() {
-        if let Projection::Orthographic(ortho) = projection {
-            info!(
-                "ortho near={} far={} scale={} viewport_origin={:?}",
-                ortho.near, ortho.far, ortho.scale, ortho.viewport_origin
-            );
-        }
-    }
 }
 
 fn auto_start(
+    mut flags: ResMut<DebugFlags>,
     time: Res<Time>,
-    state: Res<State<GameState>>,
     mut next_state: ResMut<NextState<GameState>>,
     mut timer: Local<f32>,
 ) {
-    if *state.get() != GameState::Menu {
+    if !flags.auto_start {
         return;
     }
     *timer += time.delta_secs();
-    if *timer >= 2.0 {
+    if *timer >= 1.0 {
         *timer = 0.0;
+        flags.auto_start = false;
         info!("auto_start: entering Playing");
         next_state.set(GameState::Playing);
     }
@@ -184,22 +171,21 @@ fn auto_start(
 fn auto_screenshot(
     time: Res<Time>,
     mut commands: Commands,
+    mut flags: ResMut<DebugFlags>,
     mut timer: Local<f32>,
-    mut taken: Local<bool>,
 ) {
-    if *taken {
+    let Some((path, delay)) = flags.screenshot.clone() else {
         return;
-    }
+    };
     *timer += time.delta_secs();
-    if *timer < 5.0 {
+    if *timer < delay {
         return;
     }
-    *taken = true;
-    let path = "C:/Users/User/AppData/Local/Temp/opencode/bevy_shot.png";
     info!("auto_screenshot: saving {path}");
     commands
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
+    flags.screenshot = None;
 }
 
 fn debug_draw(

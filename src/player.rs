@@ -2,23 +2,31 @@ use bevy::math::EulerRot;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::arena::Arena;
+use crate::arena::{Arena, PLAYER_SPAWN};
 use crate::assets::GameAssets;
+use crate::build::BuildMode;
 use crate::collision::{circle_aabb_pushout, Collider, StaticCollider};
-use crate::combat::{Bullet, Health, HitFlash, Lifetime, Velocity};
-use crate::fx::{spawn_burst, FadeOut, ScreenShake};
+use crate::combat::{Bullet, BulletKind, Health, HitFlash, Lifetime, Velocity};
+use crate::fx::{spawn_burst, spawn_tracer, FadeOut, ScreenShake};
+use crate::healthbar::spawn_health_bar;
 use crate::states::{gameplay_active, GameSet, GameState};
 
-const PLAYER_RADIUS: f32 = 30.0;
-const PLAYER_ACCEL: f32 = 1700.0;
-const PLAYER_MAX_SPEED: f32 = 265.0;
-const FIRE_INTERVAL: f32 = 0.14;
+const PLAYER_RADIUS: f32 = 27.0;
+const PLAYER_ACCEL: f32 = 1900.0;
+const PLAYER_MAX_SPEED: f32 = 285.0;
+const FIRE_INTERVAL: f32 = 0.13;
 
 #[derive(Component)]
 pub struct Player;
 
 #[derive(Component)]
 pub struct PlayerTurret;
+
+#[derive(Component)]
+pub struct PlayerLegs {
+    pub timer: f32,
+    pub frame: usize,
+}
 
 #[derive(Component)]
 pub struct Crosshair;
@@ -44,7 +52,7 @@ impl Plugin for PlayerPlugin {
             )
             .add_systems(
                 Update,
-                player_movement
+                (player_movement, animate_legs)
                     .in_set(GameSet::Movement)
                     .run_if(gameplay_active),
             );
@@ -52,81 +60,79 @@ impl Plugin for PlayerPlugin {
 }
 
 fn spawn_player(mut commands: Commands, assets: Res<GameAssets>) {
-    commands.spawn((
-        Sprite {
-            image: assets.player_hull.clone(),
-            custom_size: Some(Vec2::new(76.0, 72.0)),
-            ..default()
-        },
-        Transform::from_xyz(0.0, 0.0, 10.0),
-        Player,
-        Health {
-            current: 100.0,
-            max: 100.0,
-        },
-        Velocity::default(),
-        Collider::circle(PLAYER_RADIUS),
-        HitFlash::default(),
-        Repair {
-            charges: 3,
-            max_charges: 3,
-            channel: 0.0,
-            channel_time: 0.8,
-        },
-        DespawnOnExit(GameState::Playing),
-    ));
+    let spawn = PLAYER_SPAWN;
+
+    let player = commands
+        .spawn((
+            Sprite {
+                image: assets.player_legs[0].clone(),
+                custom_size: Some(Vec2::splat(82.0)),
+                ..default()
+            },
+            Transform::from_xyz(spawn.x, spawn.y, 10.0),
+            Player,
+            PlayerLegs {
+                timer: 0.0,
+                frame: 0,
+            },
+            Health::new(150.0),
+            Velocity::default(),
+            Collider::circle(PLAYER_RADIUS),
+            HitFlash::default(),
+            Repair {
+                charges: 3,
+                max_charges: 3,
+                channel: 0.0,
+                channel_time: 0.85,
+            },
+            DespawnOnExit(GameState::Playing),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Sprite {
+                    image: assets.shadow.clone(),
+                    custom_size: Some(Vec2::splat(86.0)),
+                    color: Color::srgba(1.0, 1.0, 1.0, 0.65),
+                    ..default()
+                },
+                Transform::from_xyz(6.0, -8.0, -7.0),
+            ));
+            parent.spawn((
+                Sprite {
+                    image: assets.selection_ring.clone(),
+                    custom_size: Some(Vec2::splat(84.0)),
+                    color: Color::srgba(0.45, 1.0, 0.6, 0.55),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, -7.5),
+            ));
+        })
+        .id();
 
     commands.spawn((
         Sprite {
-            image: assets.player_turret.clone(),
-            custom_size: Some(Vec2::new(24.0, 52.0)),
+            image: assets.player_torso.clone(),
+            custom_size: Some(Vec2::splat(82.0)),
             ..default()
         },
-        Transform::from_xyz(0.0, 0.0, 11.0),
+        Transform::from_xyz(spawn.x, spawn.y, 11.0),
         PlayerTurret,
         DespawnOnExit(GameState::Playing),
     ));
 
     commands.spawn((
-        Sprite::from_color(Color::srgba(1.0, 0.92, 0.4, 0.9), Vec2::splat(8.0)),
-        Transform::from_xyz(0.0, 0.0, 30.0),
+        Sprite {
+            image: assets.ring.clone(),
+            custom_size: Some(Vec2::splat(24.0)),
+            color: Color::srgba(0.45, 0.95, 1.0, 0.9),
+            ..default()
+        },
+        Transform::from_xyz(spawn.x, spawn.y, 40.0),
         Crosshair,
         DespawnOnExit(GameState::Playing),
     ));
 
-    let z_ladder = [
-        -9.0, -5.0, -2.0, 0.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0,
-        500.0, 800.0,
-    ];
-    for (i, z) in z_ladder.into_iter().enumerate() {
-        let hue = i as f32 / z_ladder.len() as f32;
-        let color = Color::hsl(hue * 360.0, 1.0, 0.55);
-        commands.spawn((
-            Sprite::from_color(color, Vec2::splat(48.0)),
-            Transform::from_xyz(-480.0 + i as f32 * 80.0, -150.0, z),
-            DespawnOnExit(GameState::Playing),
-        ));
-    }
-    for (i, handle) in assets.tiles.iter().enumerate() {
-        commands.spawn((
-            Sprite {
-                image: handle.clone(),
-                custom_size: Some(Vec2::splat(64.0)),
-                ..default()
-            },
-            Transform::from_xyz(-240.0 + i as f32 * 160.0, 20.0, 10.0),
-            DespawnOnExit(GameState::Playing),
-        ));
-    }
-    commands.spawn((
-        Sprite {
-            image: assets.player_hull.clone(),
-            custom_size: Some(Vec2::new(76.0, 72.0)),
-            ..default()
-        },
-        Transform::from_xyz(-400.0, 0.0, 10.0),
-        DespawnOnExit(GameState::Playing),
-    ));
+    spawn_health_bar(&mut commands, player, 74.0, 58.0, false);
 }
 
 fn player_movement(
@@ -157,7 +163,7 @@ fn player_movement(
     let axis = axis.normalize_or_zero();
 
     velocity.0 += axis * PLAYER_ACCEL * dt;
-    velocity.0 *= 1.0 - (7.0 * dt).min(1.0);
+    velocity.0 *= 1.0 - (8.0 * dt).min(1.0);
     velocity.0 = velocity.0.clamp_length_max(PLAYER_MAX_SPEED);
 
     transform.translation.x += velocity.0.x * dt;
@@ -190,7 +196,7 @@ fn player_movement(
         }
     }
 
-    let limit = arena.half - Vec2::splat(PLAYER_RADIUS + 4.0);
+    let limit = arena.half - Vec2::splat(PLAYER_RADIUS + 8.0);
     transform.translation.x = transform.translation.x.clamp(-limit.x, limit.x);
     transform.translation.y = transform.translation.y.clamp(-limit.y, limit.y);
 
@@ -199,6 +205,33 @@ fn player_movement(
         transform.rotation = transform
             .rotation
             .slerp(Quat::from_rotation_z(target), (12.0 * dt).min(1.0));
+    }
+}
+
+fn animate_legs(
+    time: Res<Time>,
+    assets: Res<GameAssets>,
+    mut legs: Query<(&mut PlayerLegs, &mut Sprite, &Velocity)>,
+) {
+    let moving = legs
+        .iter()
+        .next()
+        .map(|(_, _, velocity)| velocity.0.length_squared() > 400.0)
+        .unwrap_or(false);
+
+    for (mut walk, mut sprite, _) in &mut legs {
+        if !moving {
+            sprite.image = assets.player_legs[0].clone();
+            walk.frame = 0;
+            walk.timer = 0.0;
+            continue;
+        }
+        walk.timer += time.delta_secs();
+        if walk.timer >= 0.11 {
+            walk.timer = 0.0;
+            walk.frame = (walk.frame + 1) % 2;
+            sprite.image = assets.player_legs[walk.frame].clone();
+        }
     }
 }
 
@@ -243,6 +276,7 @@ fn aim_turret(
 fn update_crosshair(
     window: Single<&Window, With<PrimaryWindow>>,
     camera: Single<(&Camera, &GlobalTransform)>,
+    time: Res<Time>,
     mut crosshair: Query<&mut Transform, (With<Crosshair>, Without<Player>)>,
 ) {
     let (camera, camera_transform) = *camera;
@@ -254,6 +288,8 @@ fn update_crosshair(
     };
     crosshair_transform.translation.x = cursor.x;
     crosshair_transform.translation.y = cursor.y;
+    crosshair_transform.rotation =
+        Quat::from_rotation_z(time.elapsed_secs() * 0.8);
 }
 
 fn player_shoot(
@@ -261,13 +297,20 @@ fn player_shoot(
     mouse: Res<ButtonInput<MouseButton>>,
     mut commands: Commands,
     assets: Res<GameAssets>,
+    build: Res<BuildMode>,
+    window: Single<&Window, With<PrimaryWindow>>,
     player: Query<&Transform, With<Player>>,
     turret: Query<&Transform, (With<PlayerTurret>, Without<Player>)>,
     mut cooldown: Local<f32>,
+    mut side: Local<bool>,
     mut shake: ResMut<ScreenShake>,
 ) {
     *cooldown = (*cooldown - time.delta_secs()).max(0.0);
-    if !mouse.pressed(MouseButton::Left) || *cooldown > 0.0 {
+    if build.active
+        || !mouse.pressed(MouseButton::Left)
+        || *cooldown > 0.0
+        || crate::ui::cursor_over_hud(&window)
+    {
         return;
     }
 
@@ -281,36 +324,52 @@ fn player_shoot(
     *cooldown = FIRE_INTERVAL;
 
     let angle = turret_transform.rotation.to_euler(EulerRot::XYZ).2;
-    let spread = (fastrand::f32() - 0.5) * 0.05;
+    let spread = (fastrand::f32() - 0.5) * 0.035;
     let direction = Vec2::from_angle(angle + std::f32::consts::FRAC_PI_2 + spread);
-    let muzzle = player_transform.translation.xy() + direction * 38.0;
+    let perpendicular = Vec2::new(-direction.y, direction.x);
+    *side = !*side;
+    let offset = if *side { 9.0 } else { -9.0 };
+    let muzzle = player_transform.translation.xy() + direction * 38.0 + perpendicular * offset;
 
     commands.spawn((
         Sprite {
-            image: assets.bullet.clone(),
-            custom_size: Some(Vec2::new(10.0, 22.0)),
+            image: assets.bullet_gauss.clone(),
+            custom_size: Some(Vec2::new(10.0, 26.0)),
             ..default()
         },
-        Transform::from_xyz(muzzle.x, muzzle.y, 14.0)
+        Transform::from_xyz(muzzle.x, muzzle.y, 16.0)
             .with_rotation(Quat::from_rotation_z(angle + spread)),
-        Velocity(direction * 1150.0),
+        Velocity(direction * 1250.0),
         Bullet {
-            damage: 14.0,
-            radius: 5.0,
+            damage: 17.0,
+            radius: 6.0,
+            splash: 0.0,
+            slow: 0.0,
+            kind: BulletKind::Gauss,
         },
-        Lifetime(0.9),
+        Lifetime(1.0),
         DespawnOnExit(GameState::Playing),
     ));
+
+    spawn_tracer(
+        &mut commands,
+        &assets,
+        muzzle,
+        muzzle + direction * 90.0,
+        Color::srgba(0.5, 0.95, 1.0, 0.9),
+        2.4,
+        0.06,
+    );
 
     commands.spawn((
         Sprite {
             image: assets.muzzle_flash.clone(),
-            custom_size: Some(Vec2::new(22.0, 30.0)),
-            color: Color::srgb(1.0, 0.85, 0.4),
+            custom_size: Some(Vec2::splat(34.0)),
+            color: Color::srgb(1.0, 0.82, 0.4),
             ..default()
         },
-        Transform::from_xyz(muzzle.x, muzzle.y, 16.0)
-            .with_rotation(Quat::from_rotation_z(angle)),
+        Transform::from_xyz(muzzle.x, muzzle.y, 26.0)
+            .with_rotation(Quat::from_rotation_z(angle + spread)),
         FadeOut {
             timer: 0.06,
             duration: 0.06,
@@ -318,7 +377,7 @@ fn player_shoot(
         DespawnOnExit(GameState::Playing),
     ));
 
-    shake.add(0.07);
+    shake.add(0.045);
 }
 
 fn player_repair(
@@ -326,6 +385,8 @@ fn player_repair(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut commands: Commands,
+    assets: Res<GameAssets>,
+    build: Res<BuildMode>,
     mut heal_timer: Local<f32>,
     mut player: Query<(&Transform, &mut Health, &mut Repair, &Velocity), With<Player>>,
 ) {
@@ -337,36 +398,39 @@ fn player_repair(
     let moving = velocity.0.length_squared() > 400.0;
     let firing = mouse.pressed(MouseButton::Left);
 
-    if !holding || moving || firing || repair.charges == 0 || health.current >= health.max {
+    if build.active || !holding || moving || firing || repair.charges == 0 || health.current >= health.max
+    {
         repair.channel = 0.0;
         return;
     }
 
     repair.channel += time.delta_secs();
     *heal_timer += time.delta_secs();
-    if *heal_timer >= 0.12 {
+    if *heal_timer >= 0.11 {
         *heal_timer = 0.0;
         spawn_burst(
             &mut commands,
-            transform.translation.xy() + Vec2::new(0.0, 10.0),
+            &assets,
+            transform.translation.xy() + Vec2::new(0.0, 12.0),
             Color::srgb(0.3, 1.0, 0.45),
             2,
-            45.0,
-            3.0,
+            55.0,
+            4.0,
         );
     }
 
     if repair.channel >= repair.channel_time {
         repair.channel = 0.0;
         repair.charges -= 1;
-        health.current = (health.current + 35.0).min(health.max);
+        health.current = (health.current + 45.0).min(health.max);
         spawn_burst(
             &mut commands,
+            &assets,
             transform.translation.xy(),
             Color::srgb(0.4, 1.0, 0.5),
-            12,
-            110.0,
-            4.0,
+            14,
+            120.0,
+            5.0,
         );
     }
 }
