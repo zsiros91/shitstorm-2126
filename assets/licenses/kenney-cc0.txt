@@ -1,0 +1,13 @@
+Third-party assets used by SHITSTORM 2126
+=========================================
+
+All art and fonts below are by Kenney (https://kenney.nl) and are released
+under the Creative Commons Zero (CC0 1.0) public domain dedication.
+https://creativecommons.org/publicdomain/zero/1.0/
+
+- "Top-down Tanks Remastered" - https://kenney.nl/assets/top-down-tanks-remastered
+- "Top-down Shooter" - https://kenney.nl/assets/top-down-shooter
+- "Kenney Fonts" - https://kenney.nl/assets/kenney-fonts
+
+You may use these assets in personal and commercial projects.
+Attribution is not required, but is appreciated.
