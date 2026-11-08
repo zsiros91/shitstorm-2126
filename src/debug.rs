@@ -9,6 +9,7 @@ use crate::collision::{Collider, StaticCollider};
 use crate::enemy::{spawn_enemy, Enemy, EnemyKind};
 use crate::player::Player;
 use crate::states::GameState;
+use crate::tower::{spawn_tower, TowerKind};
 use crate::waves::{WaveManager, WavePhase};
 
 #[derive(Resource, Default)]
@@ -17,6 +18,7 @@ pub struct DebugFlags {
     pub god_mode: bool,
     pub slow_mo: bool,
     pub auto_start: bool,
+    pub demo_towers: bool,
     pub screenshot: Option<(String, f32)>,
 }
 
@@ -26,17 +28,37 @@ impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugFlags>()
             .add_systems(Startup, read_env_flags)
+            .add_systems(
+                OnEnter(GameState::Playing),
+                seed_demo_towers.run_if(demo_towers_enabled),
+            )
             .add_systems(Update, auto_start.run_if(in_state(GameState::Menu)))
+            .add_systems(Update, auto_screenshot)
             .add_systems(
                 Update,
-                (debug_keys, debug_draw, debug_status, auto_screenshot)
-                    .run_if(in_state(GameState::Playing)),
+                (debug_keys, debug_draw, debug_status).run_if(in_state(GameState::Playing)),
             );
+    }
+}
+
+fn demo_towers_enabled(flags: Res<DebugFlags>) -> bool {
+    flags.demo_towers
+}
+
+fn seed_demo_towers(mut commands: Commands, assets: Res<GameAssets>) {
+    for (kind, position) in [
+        (TowerKind::Gauss, Vec2::new(-220.0, -110.0)),
+        (TowerKind::Missile, Vec2::new(220.0, -110.0)),
+        (TowerKind::Relay, Vec2::new(-360.0, 130.0)),
+        (TowerKind::Arc, Vec2::new(0.0, 190.0)),
+    ] {
+        spawn_tower(&mut commands, &assets, kind, position);
     }
 }
 
 fn read_env_flags(mut flags: ResMut<DebugFlags>) {
     flags.auto_start = std::env::var("SHITSTORM_AUTOSTART").is_ok();
+    flags.demo_towers = std::env::var("SHITSTORM_DEMO_TOWERS").is_ok();
     if let Ok(path) = std::env::var("SHITSTORM_SCREENSHOT") {
         let delay = std::env::var("SHITSTORM_SCREENSHOT_DELAY")
             .ok()

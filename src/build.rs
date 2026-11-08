@@ -155,12 +155,15 @@ fn update_ghost(
     mut commands: Commands,
     mut mode: ResMut<BuildMode>,
     economy: Res<Economy>,
-    hq: Query<&Transform, With<Hq>>,
-    nodes: Query<(&Transform, &PowerNode), Without<Hq>>,
-    statics: Query<(&Transform, &StaticCollider)>,
+    hq: Query<&Transform, (With<Hq>, Without<BuildGhost>)>,
+    nodes: Query<(&Transform, &PowerNode), (Without<Hq>, Without<BuildGhost>)>,
+    statics: Query<(&Transform, &StaticCollider), Without<BuildGhost>>,
     ghosts: Query<Entity, With<BuildGhost>>,
     mut parts: Query<(&mut Transform, &mut Sprite), (With<BuildGhost>, Without<BuildGhostRange>)>,
-    mut ranges: Query<(&mut Transform, &mut Sprite), With<BuildGhostRange>>,
+    mut ranges: Query<
+        (&mut Transform, &mut Sprite),
+        (With<BuildGhost>, With<BuildGhostRange>),
+    >,
 ) {
     if !mode.active {
         if mode.ghost_kind.is_some() {

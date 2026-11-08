@@ -61,8 +61,8 @@ impl Plugin for HealthBarPlugin {
 
 fn update_health_bars(
     mut commands: Commands,
-    owners: Query<(&Transform, &Health)>,
-    mut bars: Query<(Entity, &HealthBar, &mut Transform, &mut Sprite)>,
+    owners: Query<(&Transform, &Health), Without<HealthBar>>,
+    mut bars: Query<(Entity, &HealthBar, &mut Transform, &mut Sprite), With<HealthBar>>,
 ) {
     for (entity, bar, mut transform, mut sprite) in &mut bars {
         let Ok((owner_transform, health)) = owners.get(bar.owner) else {

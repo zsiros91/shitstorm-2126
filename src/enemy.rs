@@ -148,7 +148,7 @@ fn enemy_ai(
     time: Res<Time>,
     arena: Res<Arena>,
     snapshot: Res<EnemySnapshot>,
-    hq: Query<(Entity, &Transform, &Collider), With<Hq>>,
+    hq: Query<(Entity, &Transform, &Collider), (With<Hq>, Without<Enemy>)>,
     player: Query<(Entity, &Transform, &Collider), (With<Player>, Without<Enemy>)>,
     towers: Query<(Entity, &Transform, &Collider), (With<Tower>, Without<Enemy>)>,
     mut enemies: Query<

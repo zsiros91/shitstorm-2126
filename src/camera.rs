@@ -6,6 +6,9 @@ use crate::fx::ScreenShake;
 use crate::player::Player;
 use crate::states::{gameplay_active, GameSet};
 
+/// Vertical offset keeps the HQ visible above the player when the run starts.
+const CAMERA_BIAS: Vec2 = Vec2::new(0.0, 100.0);
+
 #[derive(Component)]
 pub struct CameraRig {
     pub base: Vec2,
@@ -51,7 +54,7 @@ fn camera_follow(
 
     let half_view = Vec2::new(window.width(), window.height()) * 0.5;
     let limit = (arena.half - half_view).max(Vec2::ZERO);
-    let target = player_transform.translation.xy().clamp(-limit, limit);
+    let target = (player_transform.translation.xy() + CAMERA_BIAS).clamp(-limit, limit);
     let smoothing = 1.0 - (-9.0 * time.delta_secs()).exp();
     camera_rig.base = camera_rig.base.lerp(target, smoothing);
 }
