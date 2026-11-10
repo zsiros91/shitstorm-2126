@@ -119,7 +119,12 @@ mod tests {
     #[test]
     fn circles_overlap() {
         assert!(circle_overlap(Vec2::ZERO, 10.0, Vec2::new(15.0, 0.0), 10.0));
-        assert!(!circle_overlap(Vec2::ZERO, 10.0, Vec2::new(21.0, 0.0), 10.0));
+        assert!(!circle_overlap(
+            Vec2::ZERO,
+            10.0,
+            Vec2::new(21.0, 0.0),
+            10.0
+        ));
     }
 
     #[test]

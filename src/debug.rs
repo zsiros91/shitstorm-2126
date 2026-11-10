@@ -1,16 +1,15 @@
 use bevy::log::info;
 use bevy::math::Isometry2d;
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use bevy::window::PrimaryWindow;
 
 use crate::arena::Arena;
 use crate::assets::GameAssets;
 use crate::collision::{Collider, StaticCollider};
-use crate::enemy::{spawn_enemy, Enemy, EnemyKind};
+use crate::enemy::{Enemy, EnemyKind, spawn_enemy};
 use crate::player::Player;
-use crate::states::GameState;
-use crate::tower::{spawn_tower, TowerKind};
-use crate::waves::{WaveManager, WavePhase};
+use crate::states::{GameSet, GameState};
 
 #[derive(Resource, Default)]
 pub struct DebugFlags {
@@ -18,7 +17,9 @@ pub struct DebugFlags {
     pub god_mode: bool,
     pub slow_mo: bool,
     pub auto_start: bool,
-    pub demo_towers: bool,
+    /// Scripted walk + fire sequence (`SHITSTORM_DEMO_INPUT`), used to
+    /// capture gameplay screenshots without a real mouse or keyboard.
+    pub demo_input: bool,
     pub screenshot: Option<(String, f32)>,
 }
 
@@ -28,12 +29,15 @@ impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugFlags>()
             .add_systems(Startup, read_env_flags)
-            .add_systems(
-                OnEnter(GameState::Playing),
-                seed_demo_towers.run_if(demo_towers_enabled),
-            )
             .add_systems(Update, auto_start.run_if(in_state(GameState::Menu)))
             .add_systems(Update, auto_screenshot)
+            .add_systems(
+                Update,
+                demo_input
+                    .before(GameSet::Input)
+                    .run_if(demo_enabled)
+                    .run_if(in_state(GameState::Playing)),
+            )
             .add_systems(
                 Update,
                 (debug_keys, debug_draw, debug_status).run_if(in_state(GameState::Playing)),
@@ -41,24 +45,17 @@ impl Plugin for DebugPlugin {
     }
 }
 
-fn demo_towers_enabled(flags: Res<DebugFlags>) -> bool {
-    flags.demo_towers
-}
-
-fn seed_demo_towers(mut commands: Commands, assets: Res<GameAssets>) {
-    for (kind, position) in [
-        (TowerKind::Gauss, Vec2::new(-220.0, -110.0)),
-        (TowerKind::Missile, Vec2::new(220.0, -110.0)),
-        (TowerKind::Relay, Vec2::new(-360.0, 130.0)),
-        (TowerKind::Arc, Vec2::new(0.0, 190.0)),
-    ] {
-        spawn_tower(&mut commands, &assets, kind, position);
-    }
+fn demo_enabled(flags: Res<DebugFlags>) -> bool {
+    flags.demo_input
 }
 
 fn read_env_flags(mut flags: ResMut<DebugFlags>) {
     flags.auto_start = std::env::var("SHITSTORM_AUTOSTART").is_ok();
-    flags.demo_towers = std::env::var("SHITSTORM_DEMO_TOWERS").is_ok();
+    flags.demo_input = std::env::var("SHITSTORM_DEMO_INPUT").is_ok();
+    if flags.demo_input {
+        // keep the scripted run alive long enough to capture the shot
+        flags.god_mode = true;
+    }
     if let Ok(path) = std::env::var("SHITSTORM_SCREENSHOT") {
         let delay = std::env::var("SHITSTORM_SCREENSHOT_DELAY")
             .ok()
@@ -77,31 +74,15 @@ fn debug_keys(
     arena: Res<Arena>,
     player: Query<&Transform, With<Player>>,
     enemies: Query<Entity, With<Enemy>>,
-    mut waves: Option<ResMut<WaveManager>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     if keys.just_pressed(KeyCode::F1) {
         flags.show_colliders = !flags.show_colliders;
     }
 
+    // F2: ring of mixed hostiles around the player
     if keys.just_pressed(KeyCode::F2) {
-        if let Ok(player_transform) = player.single() {
-            let wave = waves.as_deref().map(|waves| waves.wave).unwrap_or(1);
-            let limit = arena.half - Vec2::splat(50.0);
-            for _ in 0..10 {
-                let angle = fastrand::f32() * std::f32::consts::TAU;
-                let distance = 180.0 + fastrand::f32() * 220.0;
-                let position = (player_transform.translation.xy()
-                    + Vec2::from_angle(angle) * distance)
-                    .clamp(-limit, limit);
-                let kind = match fastrand::u32(0..3) {
-                    0 => EnemyKind::Zergling,
-                    1 => EnemyKind::Hydralisk,
-                    _ => EnemyKind::Ultralisk,
-                };
-                spawn_enemy(&mut commands, &assets, kind, position, wave);
-            }
-        }
+        spawn_hostile_ring(&mut commands, &assets, &arena, &player);
     }
 
     if keys.just_pressed(KeyCode::F3) {
@@ -120,16 +101,6 @@ fn debug_keys(
         info!("god_mode={}", flags.god_mode);
     }
 
-    if keys.just_pressed(KeyCode::F6) {
-        if let Some(waves) = waves.as_mut() {
-            for entity in &enemies {
-                commands.entity(entity).despawn();
-            }
-            waves.remaining_to_spawn = 0;
-            waves.phase = WavePhase::Clearing;
-        }
-    }
-
     if keys.just_pressed(KeyCode::F7) {
         next_state.set(GameState::GameOver);
     }
@@ -144,12 +115,129 @@ fn debug_keys(
     }
 }
 
+/// Ring of mixed hostiles dropped around the survivor (F2 and demo runs).
+fn spawn_hostile_ring(
+    commands: &mut Commands,
+    assets: &GameAssets,
+    arena: &Arena,
+    player: &Query<&Transform, With<Player>>,
+) {
+    let Ok(player_transform) = player.single() else {
+        return;
+    };
+    let limit = arena.half - Vec2::splat(50.0);
+    for i in 0..10 {
+        let angle = fastrand::f32() * std::f32::consts::TAU;
+        let distance = 160.0 + fastrand::f32() * 200.0;
+        let position = (player_transform.translation.xy() + Vec2::from_angle(angle) * distance)
+            .clamp(-limit, limit);
+        let kind = if i % 3 == 0 {
+            EnemyKind::Raider
+        } else {
+            EnemyKind::Infected
+        };
+        spawn_enemy(commands, assets, kind, position);
+    }
+}
+
+/// Scripted input for `SHITSTORM_DEMO_INPUT`: seeds a hostile ring, then
+/// walks the survivor and fires in bursts so a single screenshot shows
+/// movement, muzzle flashes, the magazine gauge and the reload strip.
+fn demo_input(
+    time: Res<Time>,
+    mut elapsed: Local<f32>,
+    mut seeded: Local<bool>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    mut window: Single<&mut Window, With<PrimaryWindow>>,
+    camera: Single<(&Camera, &GlobalTransform), Without<Player>>,
+    enemies: Query<&Transform, With<Enemy>>,
+    player: Query<&Transform, With<Player>>,
+    mut commands: Commands,
+    assets: Res<GameAssets>,
+    arena: Res<Arena>,
+) {
+    *elapsed += time.delta_secs();
+    let t = *elapsed;
+
+    if !*seeded && !player.is_empty() {
+        *seeded = true;
+        spawn_hostile_ring(&mut commands, &assets, &arena, &player);
+    }
+
+    // aim at the nearest hostile that is not behind a HUD panel, so the
+    // scripted shot stays exactly on target (no clamping to dodge panels,
+    // which would skew the aim badly at contact range)
+    let size = window.size();
+    let mut aim_point = None;
+    if let Ok(player_transform) = player.single() {
+        let (camera, camera_transform) = *camera;
+        let player_position = player_transform.translation.xy();
+        let mut best_clear: Option<(f32, Vec2)> = None;
+        let mut nearest_any: Option<(f32, Vec2)> = None;
+        for foe in enemies.iter() {
+            let world = foe.translation.xy();
+            let distance = world.distance_squared(player_position);
+            if nearest_any.is_none_or(|(best, _)| distance < best) {
+                nearest_any = Some((distance, world));
+            }
+            if let Ok(point) = camera.world_to_viewport(camera_transform, foe.translation) {
+                if !crate::ui::hud_blocks(point, size)
+                    && best_clear.is_none_or(|(best, _)| distance < best)
+                {
+                    best_clear = Some((distance, point));
+                }
+            }
+        }
+        aim_point = best_clear.map(|(_, point)| point).or_else(|| {
+            nearest_any.and_then(|(_, world)| {
+                camera
+                    .world_to_viewport(camera_transform, world.extend(0.0))
+                    .ok()
+            })
+        });
+    }
+    window.set_cursor_position(Some(
+        aim_point.unwrap_or(Vec2::new(size.x * 0.6, size.y * 0.4)),
+    ));
+
+    // walk north, cut east, then stand and shoot
+    let step = if t < 2.0 {
+        Some(KeyCode::KeyW)
+    } else if t < 3.6 {
+        Some(KeyCode::KeyD)
+    } else {
+        None
+    };
+    for key in [KeyCode::KeyW, KeyCode::KeyD] {
+        if step == Some(key) {
+            keys.press(key);
+        } else {
+            keys.release(key);
+        }
+    }
+
+    // flash the collider overlay for one frame so screenshots can show it
+    if (1.0..1.15).contains(&t) {
+        keys.press(KeyCode::F1);
+    } else {
+        keys.release(KeyCode::F1);
+    }
+
+    // one long burst: the magazine runs dry and the reload strip shows
+    let firing = (4.2..7.4).contains(&t);
+    if firing {
+        mouse.press(MouseButton::Left);
+    } else {
+        mouse.release(MouseButton::Left);
+    }
+}
+
 fn debug_status(
     time: Res<Time>,
     mut timer: Local<f32>,
     player: Query<&Transform, With<Player>>,
     enemies: Query<&Enemy>,
-    towers: Query<&crate::tower::Tower>,
     images: Res<Assets<Image>>,
     assets: Res<GameAssets>,
 ) {
@@ -164,11 +252,10 @@ fn debug_status(
         .map(|transform| transform.translation)
         .unwrap_or(Vec3::ZERO);
     info!(
-        "player={:?} enemies={} towers={} sprites_ready={}",
+        "player={:?} enemies={} sprites_ready={}",
         player_position,
         enemies.iter().count(),
-        towers.iter().count(),
-        images.get(&assets.player_torso).is_some()
+        images.get(&assets.player_body[0][0]).is_some()
     );
 }
 

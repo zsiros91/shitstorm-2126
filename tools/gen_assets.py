@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Generate the original StarCraft-inspired sprite set for SHITSTORM 2126.
+"""Native-resolution pixel-art generator for SHITSTORM 2126.
 
-Everything is drawn procedurally so the game ships with original art only.
+Everything is drawn procedurally at 1:1 pixel resolution: hard edges,
+limited palette, ordered dithering, no resampling, no vector smoothing.
 Run with:  python3 tools/gen_assets.py
 Requires Pillow (pip install pillow).
 """
@@ -12,1322 +13,1577 @@ import math
 import random
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "assets" / "sprites"
-FONTS = ROOT / "assets" / "fonts"
 OUT.mkdir(parents=True, exist_ok=True)
 
-SS = 4  # supersampling factor
-
-# Pillow's ellipse requires ordered coordinates; a lot of the procedural
-# sprites mirror shapes with a negative sign.
-_orig_ellipse = ImageDraw.ImageDraw.ellipse
-
-
-def _safe_ellipse(self, xy, *args, **kwargs):
-    x0, y0, x1, y1 = xy
-    if x0 > x1:
-        x0, x1 = x1, x0
-    if y0 > y1:
-        y0, y1 = y1, y0
-    return _orig_ellipse(self, (x0, y0, x1, y1), *args, **kwargs)
-
-
-ImageDraw.ImageDraw.ellipse = _safe_ellipse
-
 # ---------------------------------------------------------------------------
-# palette
+# palette -- night desert: bleached sand, rust, faded paint, deep ink outlines
 # ---------------------------------------------------------------------------
-STEEL_0 = (18, 22, 27)
-STEEL_1 = (34, 41, 49)
-STEEL_2 = (51, 61, 71)
-STEEL_3 = (74, 87, 99)
-STEEL_4 = (108, 124, 137)
-STEEL_5 = (154, 171, 181)
+INK = (18, 16, 20)
+WHITE = (255, 248, 236)
 
-RUST_1 = (72, 48, 34)
-RUST_2 = (105, 70, 44)
-RUST_3 = (141, 96, 56)
-RUST_4 = (176, 128, 74)
+SAND_1 = (180, 160, 118)
+SAND_2 = (162, 143, 103)
+SAND_3 = (142, 124, 88)
+SAND_4 = (118, 101, 71)
 
-AMBER = (231, 165, 51)
-GOLD = (212, 177, 94)
-CYAN = (70, 220, 255)
-CYAN_D = (22, 105, 138)
-CYAN_L = (180, 247, 255)
-BLUE = (58, 125, 205)
+DIRT_1 = (130, 102, 74)
+DIRT_2 = (112, 87, 62)
+DIRT_3 = (94, 73, 52)
 
-PURPLE_0 = (35, 13, 48)
-PURPLE_1 = (64, 26, 82)
-PURPLE_2 = (98, 43, 120)
-PURPLE_3 = (139, 70, 158)
-PURPLE_4 = (188, 112, 200)
-ZERG_GREEN = (113, 196, 88)
+GRAVEL_1 = (134, 132, 126)
+GRAVEL_2 = (114, 112, 106)
+GRAVEL_3 = (92, 91, 86)
 
-RED = (207, 61, 45)
-RED_D = (112, 28, 25)
-GREEN = (90, 200, 120)
-BONE = (214, 207, 178)
-WHITE = (255, 255, 255)
+DRYGRASS_1 = (140, 140, 86)
+DRYGRASS_2 = (116, 118, 70)
+DRYGRASS_3 = (96, 98, 58)
+
+ASPHALT_1 = (76, 77, 82)
+ASPHALT_2 = (66, 67, 72)
+ASPHALT_3 = (86, 87, 91)
+ASPHALT_4 = (50, 51, 55)
+
+CONCRETE_1 = (126, 125, 119)
+CONCRETE_2 = (110, 109, 104)
+CONCRETE_3 = (88, 87, 83)
+
+BRICK_1 = (130, 88, 68)
+BRICK_2 = (110, 74, 58)
+BRICK_3 = (92, 62, 50)
+MORTAR = (136, 130, 120)
+
+RUST_1 = (94, 60, 40)
+RUST_2 = (128, 82, 48)
+RUST_3 = (160, 108, 60)
+
+OLIVE_1 = (72, 78, 56)
+OLIVE_2 = (90, 98, 68)
+OLIVE_3 = (56, 62, 46)
+
+LEATHER_1 = (98, 72, 50)
+LEATHER_2 = (78, 57, 40)
+LEATHER_3 = (120, 90, 62)
+
+SKIN_1 = (214, 172, 132)
+SKIN_2 = (186, 146, 110)
+SKIN_3 = (152, 116, 86)
+
+MUTANT_1 = (152, 160, 114)
+MUTANT_2 = (122, 132, 92)
+MUTANT_3 = (96, 106, 72)
+
+HAIR_1 = (58, 46, 36)
+HAIR_2 = (94, 72, 44)
+
+YELLOW = (228, 192, 76)
+ORANGE = (212, 130, 52)
+RED = (178, 60, 44)
+RED_D = (112, 36, 30)
+TEAL = (88, 152, 156)
+TEAL_L = (140, 200, 200)
+BLUE_R = (74, 94, 124)
+GREEN_R = (94, 124, 76)
+WOOD_1 = (146, 114, 74)
+WOOD_2 = (120, 92, 58)
+WOOD_3 = (94, 72, 44)
 
 
-def rgba(c, a=None):
-    if a is not None:
-        return (c[0], c[1], c[2], a)
-    if len(c) == 4:
-        return c
-    return (c[0], c[1], c[2], 255)
-
-
-def lerp(a, b, t):
-    n = min(len(a), len(b))
-    out = [int(a[i] + (b[i] - a[i]) * t) for i in range(n)]
-    if n == 3:
-        return tuple(out)
-    return tuple(out)
+def clamp(v, lo=0, hi=255):
+    return lo if v < lo else hi if v > hi else v
 
 
 def mix(a, b, t):
-    return lerp(a, b, max(0.0, min(1.0, t)))
+    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(min(len(a), len(b))))
 
 
-def canvas(w, h, scale=SS):
-    return Image.new("RGBA", (int(w * scale), int(h * scale)), (0, 0, 0, 0))
+def rgba(c, a=255):
+    return (c[0], c[1], c[2], a)
 
 
-def S(v, scale=SS):
-    return int(round(v * scale))
+def new(w, h):
+    return Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
 
-def finish(img, w, h, name, scale=SS):
-    img = img.resize((int(w), int(h)), Image.LANCZOS)
-    img.save(OUT / name)
+def save(im, name):
+    im.save(OUT / name)
+    return name
 
 
-def save(img, name):
-    img.save(OUT / name)
-
-
-def draw_noise(img, amount=10, seed=0, tint=(255, 255, 255, 255)):
+def noise(im, amount, seed):
+    """Jitter RGB of opaque pixels for a hand-dithered texture."""
     rng = random.Random(seed)
-    px = img.load()
-    w, h = img.size
+    px = im.load()
+    w, h = im.size
     for y in range(h):
         for x in range(w):
             r, g, b, a = px[x, y]
             if a == 0:
                 continue
             n = rng.randint(-amount, amount)
+            px[x, y] = (clamp(r + n), clamp(g + n), clamp(b + n), a)
+
+
+def patch(im, x0, y0, pw, ph, col, density, seed, mode="checker"):
+    """Blend `col` over a rect of opaque pixels.
+
+    mode="checker": ordered 50% dither (density = blend strength)
+    mode="rand":    stochastic scatter (density = probability)
+    mode="solid":   full blend (density = blend strength)
+    """
+    rng = random.Random(seed)
+    px = im.load()
+    w, h = im.size
+    for y in range(max(0, y0), min(h, y0 + ph)):
+        for x in range(max(0, x0), min(w, x0 + pw)):
+            if px[x, y][3] == 0:
+                continue
+            if mode == "checker":
+                on = ((x + y) & 1) == 0
+            elif mode == "rand":
+                on = rng.random() < density
+            else:
+                on = True
+            if not on:
+                continue
+            r, g, b, a = px[x, y]
+            t = density if mode != "checker" else min(1.0, density * 1.7)
             px[x, y] = (
-                max(0, min(255, r + n + (tint[0] - 255) // 8)),
-                max(0, min(255, g + n + (tint[1] - 255) // 8)),
-                max(0, min(255, b + n + (tint[2] - 255) // 8)),
+                clamp(int(r + (col[0] - r) * t)),
+                clamp(int(g + (col[1] - g) * t)),
+                clamp(int(b + (col[2] - b) * t)),
                 a,
             )
 
 
-def glow(img, radius, color, strength=1.0):
-    """Add a soft glow derived from the bright parts of ``img``."""
-    a = img.getchannel("A")
-    mask = ImageChops.multiply(a, img.convert("L"))
-    g = mask.filter(ImageFilter.GaussianBlur(radius))
-    g = Image.eval(g, lambda v: int(v * strength))
-    layer = Image.new("RGBA", img.size, rgba(color, 0))
-    layer.putalpha(g)
-    return Image.alpha_composite(layer, img)
+def speck(im, count, seed, colors, smin=1, smax=2, strength=(60, 150)):
+    """Scatter 1-2px flecks (stones, grit, paint chips) over opaque pixels."""
+    rng = random.Random(seed)
+    px = im.load()
+    w, h = im.size
+    for _ in range(count):
+        x = rng.randrange(w)
+        y = rng.randrange(h)
+        if px[x, y][3] == 0:
+            continue
+        col = rng.choice(colors)
+        s = rng.randint(smin, smax)
+        t = rng.randint(*strength) / 255.0
+        for dy in range(s):
+            for dx in range(s):
+                xx, yy = x + dx, y + dy
+                if 0 <= xx < w and 0 <= yy < h and px[xx, yy][3] > 0:
+                    r, g, b, a = px[xx, yy]
+                    px[xx, yy] = (
+                        clamp(int(r + (col[0] - r) * t)),
+                        clamp(int(g + (col[1] - g) * t)),
+                        clamp(int(b + (col[2] - b) * t)),
+                        a,
+                    )
 
 
-def bevel_rect(d, box, fill, light=None, dark=None, radius=3, width=1, outline=None):
+def crack(im, count, seed, color, reach=7, length=(3, 6)):
+    """Hairline cracks for asphalt / concrete / brick."""
+    rng = random.Random(seed)
+    d = ImageDraw.Draw(im)
+    w, h = im.size
+    for _ in range(count):
+        x = rng.randrange(w)
+        y = rng.randrange(h)
+        pts = [(x, y)]
+        for _ in range(rng.randint(*length)):
+            x = clamp(x + rng.randint(-reach, reach), 0, w - 1)
+            y = clamp(y + rng.randint(-reach, reach), 0, h - 1)
+            pts.append((x, y))
+        d.line(pts, fill=rgba(color, 255), width=1)
+
+
+def outline(im, color=(16, 14, 18, 255)):
+    """Add a 1px dark contour around every opaque blob (needs 1px margin)."""
+    px = im.load()
+    w, h = im.size
+    add = []
+    for y in range(h):
+        for x in range(w):
+            if px[x, y][3] != 0:
+                continue
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < w and 0 <= ny < h and px[nx, ny][3] > 0:
+                    add.append((x, y))
+                    break
+    for x, y in add:
+        px[x, y] = color
+
+
+def bevel(d, box, fill, light=None, dark=None, r=2):
+    """Hard-edged bevelled rectangle: light top-left, dark bottom-right."""
     x0, y0, x1, y1 = box
-    light = light or mix(fill, WHITE, 0.34)
-    dark = dark or mix(fill, (0, 0, 0, 255), 0.42)
-    if len(fill) == 4 and fill[3] == 0:
-        return
-    d.rounded_rectangle(box, radius=radius, fill=fill, outline=outline)
-    # top / left highlights
-    d.line([(x0 + radius, y0 + width), (x1 - radius, y0 + width)], fill=light, width=width)
-    d.line([(x0 + width, y0 + radius), (x0 + width, y1 - radius)], fill=light, width=width)
-    # bottom / right shadows
-    d.line([(x0 + radius, y1 - width), (x1 - radius, y1 - width)], fill=dark, width=width)
-    d.line([(x1 - width, y0 + radius), (x1 - width, y1 - radius)], fill=dark, width=width)
+    light = light or mix(fill, WHITE, 0.32)
+    dark = dark or mix(fill, INK, 0.45)
+    d.rectangle(box, fill=rgba(fill))
+    d.line([(x0 + r, y0), (x1 - r, y0)], fill=rgba(light))
+    d.line([(x0, y0 + r), (x0, y1 - r)], fill=rgba(light))
+    d.line([(x0 + r, y1 - 1), (x1 - r, y1 - 1)], fill=rgba(dark))
+    d.line([(x1 - 1, y0 + r), (x1 - 1, y1 - r)], fill=rgba(dark))
 
 
-def bolts(d, box, color=STEEL_4, r=1.2, inset=3.0, scale=SS):
-    x0, y0, x1, y1 = box
-    for x in (x0 + S(inset, scale), x1 - S(inset, scale)):
-        for y in (y0 + S(inset, scale), y1 - S(inset, scale)):
-            rr = S(r, scale)
-            d.ellipse((x - rr, y - rr, x + rr, y + rr), fill=color)
-            d.ellipse((x - rr + S(0.5, scale), y - rr + S(0.5, scale), x + rr, y + rr), fill=mix(color, WHITE, 0.3))
+def blob(d, cx, cy, rx, ry, color, seed, alpha=255, steps=16):
+    """Irregular organic patch (stain, scorch, leaf clump)."""
+    rng = random.Random(seed)
+    pts = []
+    for i in range(steps):
+        a = i / steps * math.tau
+        j = 0.7 + rng.random() * 0.5
+        pts.append((cx + math.cos(a) * rx * j, cy + math.sin(a) * ry * j))
+    d.polygon(pts, fill=rgba(color, alpha))
 
 
-def polygon(d, pts, fill, outline=None, width=1):
-    d.polygon(pts, fill=fill)
-    if outline:
-        d.line(pts + [pts[0]], fill=outline, width=width, joint="curve")
-
-
-def glow_dot(d, pos, radius, color, core=WHITE, scale=SS):
-    x, y = pos
-    r = S(radius, scale)
-    d.ellipse((x - r, y - r, x + r, y + r), fill=color)
-    rr = max(1, int(r * 0.45))
-    d.ellipse((x - rr, y - rr, x + rr, y + rr), fill=core)
-
-
-def radial_gradient(size, inner, outer, power=2.0):
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    px = img.load()
-    c = size / 2
+def banded_glow(name, size, color, peak, power=2.2, steps=6):
+    """Radial glow with quantised alpha bands -- reads as pixel art, not blur."""
+    im = new(size, size)
+    px = im.load()
+    c = size / 2.0
     for y in range(size):
         for x in range(size):
-            dist = math.hypot(x - c + 0.5, y - c + 0.5) / c
+            dist = math.hypot(x + 0.5 - c, y + 0.5 - c) / c
             if dist > 1.0:
                 continue
-            t = max(0.0, 1.0 - dist) ** power
-            col = lerp(outer, inner, t)
-            px[x, y] = (col[0], col[1], col[2], int(col[3] * min(1.0, t * 2.2)))
-    return img
-
+            t = (1.0 - dist) ** power
+            band = int(t * peak) // 32 * 32
+            if band <= 0:
+                continue
+            px[x, y] = (color[0], color[1], color[2], min(255, band))
+    return save(im, name)
 
 # ---------------------------------------------------------------------------
-# terrain
+# terrain tiles (32x32)
 # ---------------------------------------------------------------------------
-def terrain_metal(name, seed, rust=0.18, hazard=False, base=STEEL_2):
+def tile_sand(name, seed, base=SAND_1):
     rng = random.Random(seed)
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    w = S(64)
-    d.rectangle((0, 0, w, w), fill=base)
-    # large plates
-    for _ in range(3):
-        x = rng.randint(-10, 50)
-        y = rng.randint(-10, 50)
-        pw = rng.randint(22, 42)
-        ph = rng.randint(18, 38)
-        box = (S(x), S(y), S(x + pw), S(y + ph))
-        c = mix(base, STEEL_3 if rng.random() > 0.5 else STEEL_1, rng.uniform(0.15, 0.55))
-        bevel_rect(d, box, c, radius=S(1), width=max(1, S(0.35)))
-    # seams
-    for x in (0, 32):
-        d.line([(S(x), 0), (S(x), w)], fill=STEEL_0, width=max(1, S(0.6)))
-        d.line([(S(x) + S(0.7), 0), (S(x) + S(0.7), w)], fill=STEEL_4, width=max(1, S(0.25)))
-    for y in (0, 32):
-        d.line([(0, S(y)), (w, S(y))], fill=STEEL_0, width=max(1, S(0.6)))
-        d.line([(0, S(y) + S(0.7)), (w, S(y) + S(0.7))], fill=STEEL_4, width=max(1, S(0.25)))
-    # rivets
-    for x in (5, 27, 37, 59):
-        for y in (5, 27, 37, 59):
-            bolts(d, (S(x) - 1, S(y) - 1, S(x) + 1, S(y) + 1), r=0.5, inset=0.2)
-    # scratches
-    for _ in range(rng.randint(4, 10)):
-        x = rng.uniform(2, 62)
-        y = rng.uniform(2, 62)
-        ln = rng.uniform(1.5, 6)
-        a = rng.uniform(0, math.tau)
-        d.line(
-            [(S(x), S(y)), (S(x + math.cos(a) * ln), S(y + math.sin(a) * ln))],
-            fill=mix(STEEL_4, WHITE, 0.2) + (60,),
-            width=max(1, S(0.18)),
-        )
-    # rust patches
-    if rust > 0:
-        for _ in range(int(rust * 20)):
-            x = rng.uniform(0, 64)
-            y = rng.uniform(0, 64)
-            rr = rng.uniform(1.5, 7)
-            c = mix(RUST_2, RUST_3, rng.random()) + (rng.randint(50, 130),)
-            d.ellipse((S(x - rr), S(y - rr), S(x + rr), S(y + rr)), fill=c)
-    if hazard:
-        for i in range(-2, 8):
-            d.polygon(
-                [
-                    (S(i * 12), S(64)),
-                    (S(i * 12 + 7), S(64)),
-                    (S(i * 12 + 25), S(52)),
-                    (S(i * 12 + 18), S(52)),
-                ],
-                fill=AMBER + (150,),
-            )
-    draw_noise(img, 13, seed)
-    finish(img, 64, 64, name)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 31, 31), fill=rgba(base))
+    # wind-swept dune bands (checker dithered, no gradients)
+    for i in range(3):
+        ox = rng.randrange(0, 24)
+        oy = rng.randrange(0, 26)
+        pw = rng.randint(8, 18)
+        ph = rng.randint(4, 8)
+        col = SAND_3 if i % 2 == 0 else SAND_2
+        patch(im, ox, oy, pw, ph, col, 0.5, seed + i, mode="checker")
+    speck(im, 70, seed + 11, [SAND_4, SAND_3, DIRT_3], 1, 2, (50, 130))
+    speck(im, 12, seed + 12, [(96, 84, 60), (76, 66, 48)], 1, 1, (90, 170))
+    noise(im, 5, seed)
+    return save(im, name)
 
 
-def terrain_grate():
-    rng = random.Random(7)
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    d.rectangle((0, 0, S(64), S(64)), fill=STEEL_1)
-    # under-glow
-    d.rectangle((0, 0, S(64), S(64)), fill=CYAN_D + (90,))
-    for i in range(8):
-        for j in range(8):
-            x = i * 8
-            y = j * 8
-            d.rectangle((S(x + 1), S(y + 1), S(x + 7), S(y + 7)), fill=(0, 0, 0, 0))
-            bevel_rect(
-                d,
-                (S(x + 0.5), S(y + 0.5), S(x + 7.5), S(y + 7.5)),
-                STEEL_2 + (230,),
-                radius=S(0.8),
-                width=max(1, S(0.3)),
-            )
-            d.rectangle((S(x + 2), S(y + 2), S(x + 6), S(y + 6)), fill=STEEL_0 + (235,))
-    # cyan strips seen through the grate
-    d.line([(0, S(12)), (S(64), S(12))], fill=CYAN + (100,), width=S(1.2))
-    d.line([(0, S(44)), (S(64), S(44))], fill=CYAN + (80,), width=S(1.0))
-    draw_noise(img, 8, 11)
-    finish(img, 64, 64, "tile_grate.png")
-
-
-def terrain_rock(name, seed):
+def tile_dirt(name, seed):
     rng = random.Random(seed)
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    d.rectangle((0, 0, S(64), S(64)), fill=(20, 21, 22, 255))
-    for _ in range(16):
-        x = rng.uniform(0, 64)
-        y = rng.uniform(0, 64)
-        rr = rng.uniform(5, 18)
-        pts = []
-        for k in range(7):
-            a = k / 7 * math.tau
-            rad = rr * rng.uniform(0.65, 1.0)
-            pts.append((S(x + math.cos(a) * rad), S(y + math.sin(a) * rad)))
-        c = mix((45, 45, 44, 255), (92, 88, 80, 255), rng.random())
-        polygon(d, pts, c, outline=(12, 13, 14, 255), width=S(0.6))
-    for _ in range(8):
-        x = rng.uniform(0, 64)
-        y = rng.uniform(0, 64)
-        d.line(
-            [(S(x), S(y)), (S(x + rng.uniform(-12, 12)), S(y + rng.uniform(-12, 12)))],
-            fill=(150, 140, 120, 45),
-            width=S(0.35),
-        )
-    draw_noise(img, 15, seed)
-    finish(img, 64, 64, name)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 31, 31), fill=rgba(DIRT_1))
+    for i in range(4):
+        blob(d, rng.randrange(32), rng.randrange(32), rng.randint(5, 11),
+             rng.randint(4, 8), DIRT_2 if i % 2 else DIRT_3, seed + i, alpha=255)
+    speck(im, 90, seed + 21, [DIRT_3, SAND_3, (86, 68, 50)], 1, 2, (60, 150))
+    speck(im, 14, seed + 22, [(70, 56, 40), (58, 46, 34)], 1, 1, (90, 170))
+    noise(im, 6, seed)
+    return save(im, name)
 
 
-def terrain_creep(name, seed):
+def tile_gravel(name, seed):
     rng = random.Random(seed)
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    d.rectangle((0, 0, S(64), S(64)), fill=PURPLE_1)
-    for _ in range(22):
-        x = rng.uniform(0, 64)
-        y = rng.uniform(0, 64)
-        rr = rng.uniform(4, 16)
-        d.ellipse(
-            (S(x - rr), S(y - rr), S(x + rr), S(y + rr)),
-            fill=mix(PURPLE_2, PURPLE_3, rng.random()) + (rng.randint(70, 140),),
-        )
-    # veins
-    for _ in range(7):
-        x = rng.uniform(0, 64)
-        y = rng.uniform(0, 64)
-        pts = [(S(x), S(y))]
-        for _ in range(4):
-            x += rng.uniform(-12, 12)
-            y += rng.uniform(-12, 12)
-            pts.append((S(x), S(y)))
-        d.line(pts, fill=PURPLE_4 + (180,), width=S(0.9), joint="curve")
-        d.line(pts, fill=ZERG_GREEN + (70,), width=S(0.35), joint="curve")
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 31, 31), fill=rgba(GRAVEL_2))
+    for _ in range(46):
+        x = rng.randrange(32)
+        y = rng.randrange(32)
+        r = rng.randint(1, 2)
+        col = rng.choice([GRAVEL_1, (150, 148, 140), GRAVEL_3, (124, 120, 112)])
+        d.rectangle((x, y, x + r, y + r), fill=rgba(col))
+        d.point((x, y), fill=rgba(mix(col, WHITE, 0.5)))
+    speck(im, 40, seed + 31, [GRAVEL_3, DIRT_3], 1, 1, (60, 140))
+    noise(im, 6, seed)
+    return save(im, name)
+
+
+def tile_drygrass(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 31, 31), fill=rgba(SAND_2))
     for _ in range(5):
-        glow_dot(d, (S(rng.uniform(4, 60)), S(rng.uniform(4, 60))), rng.uniform(0.8, 2.0), ZERG_GREEN + (220,))
-    draw_noise(img, 12, seed)
-    finish(img, 64, 64, name)
+        blob(d, rng.randrange(32), rng.randrange(32), rng.randint(6, 12),
+             rng.randint(4, 9), DRYGRASS_1, seed, alpha=210)
+    patch(im, 0, 0, 32, 32, DRYGRASS_2, 0.45, seed + 1, mode="checker")
+    # tufts
+    for _ in range(22):
+        x = rng.randrange(30)
+        y = rng.randrange(30)
+        h = rng.randint(2, 4)
+        col = rng.choice([DRYGRASS_3, DRYGRASS_2, DRYGRASS_1])
+        d.line([(x, y + h), (x + rng.randint(-1, 1), y)], fill=rgba(col))
+    noise(im, 6, seed)
+    return save(im, name)
 
 
-def base_pad():
-    img = canvas(512, 512)
-    d = ImageDraw.Draw(img)
-    c = S(256)
-    # outer hazard ring
-    d.ellipse((c - S(250), c - S(250), c + S(250), c + S(250)), fill=STEEL_0 + (210,))
-    d.ellipse((c - S(244), c - S(244), c + S(244), c + S(244)), fill=STEEL_2 + (235,))
-    for i in range(48):
-        a0 = i / 48 * math.tau
-        a1 = (i + 0.48) / 48 * math.tau
-        if i % 2 == 0:
-            pts = [
-                (c + math.cos(a0) * S(236), c + math.sin(a0) * S(236)),
-                (c + math.cos(a0) * S(250), c + math.sin(a0) * S(250)),
-                (c + math.cos(a1) * S(250), c + math.sin(a1) * S(250)),
-                (c + math.cos(a1) * S(236), c + math.sin(a1) * S(236)),
-            ]
-            d.polygon(pts, fill=AMBER + (190,))
-    # inner plates
-    d.ellipse((c - S(230), c - S(230), c + S(230), c + S(230)), fill=STEEL_1 + (245,))
-    d.ellipse((c - S(222), c - S(222), c + S(222), c + S(222)), fill=STEEL_2 + (245,))
-    for k in range(12):
-        a = k / 12 * math.tau
-        x = c + math.cos(a) * S(190)
-        y = c + math.sin(a) * S(190)
-        d.line([(c, c), (x, y)], fill=STEEL_0 + (90,), width=S(2.0))
-    d.ellipse((c - S(160), c - S(160), c + S(160), c + S(160)), fill=STEEL_1 + (255,), outline=STEEL_4 + (255,), width=S(1.5))
-    d.ellipse((c - S(152), c - S(152), c + S(152), c + S(152)), fill=STEEL_0 + (255,))
-    # landing circle
-    d.ellipse((c - S(126), c - S(126), c + S(126), c + S(126)), fill=STEEL_2 + (255,), outline=CYAN_D + (255,), width=S(2.0))
-    d.ellipse((c - S(110), c - S(110), c + S(110), c + S(110)), fill=STEEL_1 + (255,))
-    # H marking
-    d.rectangle((c - S(54), c - S(32), c - S(34), c + S(32)), fill=GOLD + (220,))
-    d.rectangle((c + S(34), c - S(32), c + S(54), c + S(32)), fill=GOLD + (220,))
-    d.rectangle((c - S(34), c - S(8), c + S(34), c + S(8)), fill=GOLD + (220,))
-    # corner lights
-    for k in range(8):
-        a = k / 8 * math.tau + math.pi / 8
-        x = c + math.cos(a) * S(210)
-        y = c + math.sin(a) * S(210)
-        glow_dot(d, (x, y), 6, CYAN + (255,))
-    for _ in range(90):
-        x = random.uniform(0, 512)
-        y = random.uniform(0, 512)
-        if math.hypot(x - 256, y - 256) < 238:
-            ln = random.uniform(2, 15)
-            a = random.uniform(0, math.tau)
-            d.line(
-                [(S(x), S(y)), (S(x + math.cos(a) * ln), S(y + math.sin(a) * ln))],
-                fill=(180, 195, 200, 40),
-                width=S(0.3),
-            )
-    draw_noise(img, 9, 21)
-    finish(img, 512, 512, "base_pad.png")
+def tile_asphalt(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 31, 31), fill=rgba(ASPHALT_1))
+    # patchwork repairs
+    for _ in range(2):
+        x0 = rng.randrange(24)
+        y0 = rng.randrange(24)
+        d.rectangle((x0, y0, x0 + rng.randint(6, 14), y0 + rng.randint(5, 12)),
+                    fill=rgba(ASPHALT_2 if rng.random() < 0.6 else ASPHALT_3))
+    speck(im, 90, seed + 41, [(96, 98, 102), (56, 57, 62), (108, 108, 110)],
+          1, 2, (50, 130))
+    crack(im, 2, seed + 42, ASPHALT_4, reach=6, length=(3, 5))
+    noise(im, 5, seed)
+    return save(im, name)
+
+
+def _road_base(seed):
+    name = tile_asphalt(f"_tmp_{seed}.png", seed)
+    im = Image.open(OUT / name).copy()
+    (OUT / name).unlink()
+    return im
+
+
+def tile_road(name, seed, mark="double_h"):
+    im = _road_base(seed)
+    d = ImageDraw.Draw(im)
+    if mark == "double_h":
+        d.rectangle((0, 13, 31, 14), fill=rgba(YELLOW))
+        d.rectangle((0, 17, 31, 18), fill=rgba(YELLOW))
+        # worn paint
+        for x in range(0, 32, 3):
+            if (x * 7 + seed) % 5 == 0:
+                d.rectangle((x, 13, x, 18), fill=rgba(ASPHALT_1))
+    elif mark == "dash_h":
+        d.rectangle((0, 14, 15, 16), fill=rgba((226, 222, 210)))
+        for x in range(0, 16, 4):
+            if (x + seed) % 3 == 0:
+                d.rectangle((x, 14, x, 16), fill=rgba(ASPHALT_2))
+    elif mark == "edge_h":
+        d.rectangle((0, 3, 31, 5), fill=rgba((222, 218, 206)))
+        patch(im, 0, 3, 32, 3, ASPHALT_2, 0.35, seed + 3, mode="rand")
+    elif mark == "cross_h":
+        # zebra stripes running across the horizontal road
+        for x in range(2, 32, 7):
+            d.rectangle((x, 2, x + 4, 29), fill=rgba((224, 220, 208)))
+            patch(im, x, 2, 5, 28, ASPHALT_2, 0.3, seed + x, mode="rand")
+    noise(im, 4, seed + 1)
+    return save(im, name)
+
+
+def tile_sidewalk(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 31, 31), fill=rgba(CONCRETE_1))
+    # slab joints
+    d.line([(0, 0), (31, 0)], fill=rgba(CONCRETE_3))
+    d.line([(0, 0), (0, 31)], fill=rgba(CONCRETE_3))
+    d.line([(0, 1), (31, 1)], fill=rgba(mix(CONCRETE_1, WHITE, 0.35)))
+    d.line([(1, 0), (1, 31)], fill=rgba(mix(CONCRETE_1, WHITE, 0.35)))
+    patch(im, 3, 3, 28, 28, CONCRETE_2, 0.4, seed, mode="checker")
+    speck(im, 40, seed + 51, [CONCRETE_3, (140, 138, 130)], 1, 2, (50, 130))
+    crack(im, 2, seed + 52, CONCRETE_3, reach=5, length=(2, 4))
+    noise(im, 5, seed)
+    return save(im, name)
+
+
+def tile_checker(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    light = (178, 170, 152)
+    dark = (96, 94, 92)
+    d.rectangle((0, 0, 31, 31), fill=rgba(light))
+    for y in range(0, 32, 8):
+        for x in range(0, 32, 8):
+            if ((x // 8) + (y // 8)) % 2 == 0:
+                d.rectangle((x, y, x + 7, y + 7), fill=rgba(dark))
+    # grime, scuffs, cracked tiles
+    patch(im, 0, 0, 32, 32, (70, 62, 52), 0.3, seed + 1, mode="rand")
+    speck(im, 30, seed + 61, [(64, 58, 50), (150, 142, 126)], 1, 2, (40, 120))
+    crack(im, 2, seed + 62, (60, 56, 52), reach=6, length=(3, 5))
+    noise(im, 5, seed)
+    return save(im, name)
+
+
+def tile_wood(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 31, 31), fill=rgba(WOOD_1))
+    for y in range(0, 32, 6):
+        col = WOOD_1 if (y // 6) % 2 == 0 else mix(WOOD_1, WOOD_2, 0.7)
+        d.rectangle((0, y, 31, y + 5), fill=rgba(col))
+        d.line([(0, y + 5), (31, y + 5)], fill=rgba(WOOD_3))
+        d.line([(0, y), (31, y)], fill=rgba(mix(col, WHITE, 0.18)))
+        # grain
+        for _ in range(3):
+            gx = rng.randrange(32)
+            d.line([(gx, y + 1), (clamp(gx + rng.randint(-6, 6), 0, 31), y + 4)],
+                   fill=rgba(WOOD_2))
+    speck(im, 24, seed + 71, [WOOD_3, (76, 58, 36)], 1, 1, (50, 130))
+    noise(im, 5, seed)
+    return save(im, name)
+
+
+def tile_concrete(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 31, 31), fill=rgba(CONCRETE_2))
+    d.line([(0, 16), (31, 16)], fill=rgba(CONCRETE_3))
+    d.line([(16, 0), (16, 31)], fill=rgba(CONCRETE_3))
+    patch(im, 0, 0, 32, 16, CONCRETE_1, 0.35, seed, mode="checker")
+    speck(im, 60, seed + 81, [CONCRETE_3, (140, 138, 130), (76, 74, 70)],
+          1, 2, (50, 140))
+    crack(im, 3, seed + 82, CONCRETE_3, reach=7, length=(3, 6))
+    noise(im, 6, seed)
+    return save(im, name)
 
 
 # ---------------------------------------------------------------------------
-# structures
+# walls (32x32) -- top-down block with a lit north cap and shadowed south cap
 # ---------------------------------------------------------------------------
-def command_center():
-    img = canvas(256, 256)
-    d = ImageDraw.Draw(img)
-    cx = cy = S(128)
-    # raised octagonal platform
+def wall_tile(name, kind, seed, broken=False):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    if kind == "brick":
+        base, light, dark = BRICK_2, BRICK_1, BRICK_3
+    elif kind == "concrete":
+        base, light, dark = CONCRETE_2, CONCRETE_1, CONCRETE_3
+    else:
+        base, light, dark = RUST_2, RUST_3, RUST_1
+    d.rectangle((0, 0, 31, 31), fill=rgba(base))
+    d.rectangle((0, 0, 31, 5), fill=rgba(light))
+    d.line([(0, 5), (31, 5)], fill=rgba(mix(light, WHITE, 0.45)))
+    d.rectangle((0, 26, 31, 31), fill=rgba(dark))
+    d.line([(0, 26), (31, 26)], fill=rgba(mix(dark, INK, 0.5)))
+
+    if kind == "brick":
+        for row in range(6):
+            y = 7 + row * 4
+            d.line([(0, y), (31, y)], fill=rgba(MORTAR))
+            off = 0 if row % 2 == 0 else 8
+            for x in range(off, 34, 16):
+                d.line([(x, y), (x, y + 3)], fill=rgba(MORTAR))
+        patch(im, 0, 6, 32, 20, BRICK_3, 0.3, seed + 1, mode="rand")
+    elif kind == "concrete":
+        for x in range(0, 32, 4):
+            d.line([(x, 6), (x, 25)], fill=rgba(mix(base, INK, 0.25)))
+            d.line([(x + 1, 6), (x + 1, 25)], fill=rgba(mix(base, WHITE, 0.12)))
+        for _ in range(5):
+            cx, cy = rng.randrange(32), rng.randint(8, 24)
+            r = rng.randint(2, 5)
+            d.ellipse((cx - r, cy - r, cx + r, cy + r),
+                      fill=rgba(mix(base, INK, 0.35)))
+    else:
+        for x in range(0, 32, 6):
+            d.line([(x, 6), (x, 25)], fill=rgba(mix(base, INK, 0.35)))
+            d.line([(x + 2, 6), (x + 2, 25)], fill=rgba(mix(base, WHITE, 0.18)))
+        for _ in range(7):
+            cx, cy = rng.randrange(32), rng.randint(6, 26)
+            r = rng.randint(1, 4)
+            d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=rgba(RUST_1))
+    speck(im, 26, seed + 91, [mix(base, INK, 0.4), mix(base, WHITE, 0.25)],
+          1, 2, (60, 140))
+
+    if broken:
+        # a collapsed chunk: erase an irregular hole, spill rubble below
+        pts = [(rng.randrange(6, 26), 31)]
+        cx = rng.randrange(10, 24)
+        for i in range(7):
+            a = math.pi + i / 6 * math.pi
+            pts.append((clamp(int(cx + math.cos(a) * rng.randint(7, 13)), 0, 31),
+                        clamp(int(31 + math.sin(a) * rng.randint(8, 16)), 0, 31)))
+        d.polygon(pts, fill=(0, 0, 0, 0))
+        for _ in range(20):
+            x = rng.randrange(32)
+            y = rng.randrange(20, 32)
+            if im.getpixel((x, y))[3] == 0 and rng.random() < 0.7:
+                r = rng.randint(1, 2)
+                col = rng.choice([light, base, dark, MORTAR])
+                d.rectangle((x, y, x + r, y + r), fill=rgba(col))
+    noise(im, 5, seed)
+    return save(im, name)
+
+
+# ---------------------------------------------------------------------------
+# ground decals (32x32 / 48x48, transparent)
+# ---------------------------------------------------------------------------
+def decal_leaf(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    for _ in range(30):
+        x = rng.randrange(30)
+        y = rng.randrange(30)
+        w = rng.randint(2, 4)
+        h = rng.randint(1, 3)
+        col = rng.choice([YELLOW, ORANGE, DRYGRASS_1, (196, 158, 66), DRYGRASS_2])
+        d.rectangle((x, y, x + w, y + h), fill=rgba(col, rng.randint(170, 245)))
+        d.point((x, y), fill=rgba(mix(col, WHITE, 0.4)))
+    return save(im, name)
+
+
+def decal_grass(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    for _ in range(26):
+        x = rng.randrange(32)
+        y = rng.randrange(28)
+        h = rng.randint(3, 6)
+        col = rng.choice([DRYGRASS_1, DRYGRASS_2, DRYGRASS_3])
+        d.line([(x, y + h), (clamp(x + rng.randint(-2, 2), 0, 31), y)],
+               fill=rgba(col, 230))
+    return save(im, name)
+
+
+def decal_oil(name, seed):
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    blob(d, 16, 16, 13, 10, (36, 34, 36), seed, alpha=215)
+    blob(d, 14, 18, 7, 5, (24, 22, 24), seed + 1, alpha=230)
+    d.ellipse((9, 10, 21, 17), fill=rgba((58, 66, 78), 70))
+    return save(im, name)
+
+
+def decal_blood(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    blob(d, 16, 16, 11, 9, (92, 22, 20), seed, alpha=235)
+    blob(d, 15, 15, 6, 5, (124, 30, 26), seed + 1, alpha=245)
+    for _ in range(12):
+        a = rng.random() * math.tau
+        dist = rng.uniform(7, 15)
+        x = int(16 + math.cos(a) * dist)
+        y = int(16 + math.sin(a) * dist)
+        r = rng.randint(1, 2)
+        d.rectangle((x - r, y - r, x + r, y + r), fill=rgba((110, 26, 22), 230))
+    return save(im, name)
+
+
+def decal_rubble(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    for _ in range(26):
+        x = rng.randrange(30)
+        y = rng.randrange(30)
+        r = rng.randint(1, 3)
+        col = rng.choice([CONCRETE_2, CONCRETE_3, BRICK_2, (150, 140, 120),
+                          (86, 84, 80), RUST_2])
+        d.rectangle((x, y, x + r, y + r), fill=rgba(col, rng.randint(200, 255)))
+        d.point((x, y), fill=rgba(mix(col, WHITE, 0.35)))
+    return save(im, name)
+
+
+def decal_crack(name, seed):
+    im = new(32, 32)
+    crack(im, 4, seed, (52, 52, 56), reach=7, length=(4, 7))
+    return save(im, name)
+
+
+def decal_tire(name, seed):
+    rng = random.Random(seed)
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    for y in (4, 18):
+        d.rectangle((0, y, 31, y + 6), fill=rgba((42, 40, 42), 150))
+        for x in range(0, 32, 4):
+            d.line([(x, y), (x, y + 6)], fill=rgba((30, 28, 30), 190))
+    return save(im, name)
+
+
+def decal_scorch(name, seed):
+    im = new(32, 32)
+    d = ImageDraw.Draw(im)
+    blob(d, 16, 16, 14, 12, (42, 36, 32), seed, alpha=200)
+    blob(d, 16, 16, 8, 7, (24, 21, 20), seed + 1, alpha=230)
+    speck(im, 26, seed + 2, [(66, 58, 50), (98, 86, 72)], 1, 2, (70, 150))
+    return save(im, name)
+
+# ---------------------------------------------------------------------------
+# props -- top-down, 1px ink outline, native sizes
+# ---------------------------------------------------------------------------
+def car_wreck(name, seed, body=RUST_2, flip=False):
+    rng = random.Random(seed)
+    im = new(60, 34)
+    d = ImageDraw.Draw(im)
+    w, h = 60, 34
+    # wheels peeking out at the corners
+    for x in (8, w - 20):
+        d.rectangle((x, 1, x + 11, 6), fill=rgba((30, 30, 34)))
+        d.rectangle((x, h - 7, x + 11, h - 2), fill=rgba((30, 30, 34)))
+    # hull
+    bevel(d, (3, 5, w - 4, h - 6), body, r=5)
+    # roof cabin
+    bevel(d, (18, 8, w - 16, h - 9), mix(body, INK, 0.3), r=3)
+    # windscreen / rear glass
+    d.rectangle((19, 10, 27, h - 11), fill=rgba((92, 116, 124)))
+    d.rectangle((w - 27, 10, w - 19, h - 11), fill=rgba((80, 102, 110)))
+    d.line([(20, 10), (20, h - 11)], fill=rgba((150, 176, 182)))
+    # hood scorch + rust bloom
+    d.rectangle((4, 9, 17, h - 10), fill=rgba(mix(body, RUST_1, 0.55)))
+    for _ in range(8):
+        x = rng.randint(4, w - 8)
+        y = rng.randint(7, h - 9)
+        r = rng.randint(1, 3)
+        d.ellipse((x - r, y - r, x + r, y + r), fill=rgba(RUST_1, 200))
+    # shattered glass specks
+    for _ in range(6):
+        x = rng.randint(19, w - 21)
+        y = rng.randint(10, h - 12)
+        d.point((x, y), fill=rgba((196, 214, 218)))
+    # door seam
+    d.line([(30, 8), (30, h - 9)], fill=rgba(mix(body, INK, 0.5)))
+    outline(im)
+    if flip:
+        im = im.transpose(Image.FLIP_LEFT_RIGHT)
+    return save(im, name)
+
+
+def rv_wreck(name, seed):
+    rng = random.Random(seed)
+    im = new(88, 44)
+    d = ImageDraw.Draw(im)
+    w, h = 88, 44
+    # wheels
+    for x in (12, w - 26):
+        d.rectangle((x, 1, x + 13, 7), fill=rgba((30, 30, 34)))
+        d.rectangle((x, h - 8, x + 13, h - 2), fill=rgba((30, 30, 34)))
+    # boxy body
+    bevel(d, (3, 5, w - 4, h - 6), (188, 182, 164), r=4)
+    # cab at the left
+    bevel(d, (4, 8, 24, h - 9), (150, 146, 132), r=3)
+    d.rectangle((5, 12, 15, h - 13), fill=rgba((86, 108, 116)))  # windshield
+    # faded stripe
+    d.rectangle((24, 18, w - 6, 23), fill=rgba((178, 96, 60)))
+    d.rectangle((24, 24, w - 6, 26), fill=rgba((196, 168, 96)))
+    # roof furniture: AC unit, vent, solar panel
+    bevel(d, (34, 10, 50, 22), (146, 146, 140), r=2)
+    bevel(d, (58, 12, 68, 20), (128, 130, 126), r=1)
+    d.rectangle((72, 10, 84, 22), fill=rgba((52, 66, 88)))
+    d.line([(72, 16), (84, 16)], fill=rgba((72, 92, 118)))
+    # grime + rust streaks
+    patch(im, 24, 6, 62, 34, (122, 104, 78), 0.3, seed, mode="rand")
+    for _ in range(7):
+        x = rng.randint(26, w - 8)
+        y = rng.randint(8, h - 10)
+        r = rng.randint(1, 3)
+        d.ellipse((x - r, y - r, x + r, y + r), fill=rgba(RUST_2, 190))
+    outline(im)
+    return save(im, name)
+
+
+def dumpster(name, seed, col=(78, 104, 76)):
+    rng = random.Random(seed)
+    im = new(44, 26)
+    d = ImageDraw.Draw(im)
+    bevel(d, (2, 4, 41, 23), col, r=3)
+    d.rectangle((4, 6, 40, 13), fill=rgba(mix(col, WHITE, 0.2)))   # lid
+    d.line([(4, 13), (40, 13)], fill=rgba(mix(col, INK, 0.55)))
+    d.line([(22, 5), (22, 22)], fill=rgba(mix(col, INK, 0.4)))      # lid split
+    for _ in range(9):
+        x = rng.randint(4, 38)
+        y = rng.randint(6, 21)
+        r = rng.randint(1, 3)
+        d.ellipse((x - r, y - r, x + r, y + r), fill=rgba(RUST_2, 180))
+    speck(im, 14, seed + 1, [RUST_1, mix(col, INK, 0.4)], 1, 2, (70, 150))
+    outline(im)
+    return save(im, name)
+
+
+def sofa(name, seed, col=(122, 84, 62)):
+    im = new(36, 24)
+    d = ImageDraw.Draw(im)
+    bevel(d, (2, 3, 33, 20), col, r=3)
+    d.rectangle((5, 5, 30, 12), fill=rgba(mix(col, WHITE, 0.22)))   # back cushions
+    d.line([(17, 5), (17, 12)], fill=rgba(mix(col, INK, 0.4)))
+    d.rectangle((5, 13, 30, 18), fill=rgba(mix(col, INK, 0.18)))    # seat
+    patch(im, 4, 4, 28, 16, mix(col, INK, 0.4), 0.3, seed, mode="rand")
+    outline(im)
+    return save(im, name)
+
+
+def table(name, seed):
+    im = new(26, 22)
+    d = ImageDraw.Draw(im)
+    bevel(d, (3, 3, 22, 18), WOOD_2, r=2)
+    d.rectangle((6, 6, 19, 15), fill=rgba(mix(WOOD_2, WHITE, 0.15)))
+    for y in (8, 12):
+        d.line([(6, y), (19, y)], fill=rgba(WOOD_3))
+    outline(im)
+    return save(im, name)
+
+
+def chair(name, seed, col=(94, 70, 52)):
+    im = new(14, 16)
+    d = ImageDraw.Draw(im)
+    bevel(d, (2, 4, 11, 13), col, r=1)
+    d.rectangle((3, 5, 10, 8), fill=rgba(mix(col, INK, 0.35)))
+    outline(im)
+    return save(im, name)
+
+
+def shelf(name, seed):
+    rng = random.Random(seed)
+    im = new(44, 16)
+    d = ImageDraw.Draw(im)
+    bevel(d, (1, 2, 42, 13), (116, 118, 122), r=1)
+    d.rectangle((3, 4, 40, 11), fill=rgba((86, 88, 92)))
+    # scattered goods
+    for _ in range(7):
+        x = rng.randint(4, 36)
+        y = rng.randint(5, 9)
+        col = rng.choice([RED, YELLOW, TEAL, GREEN_R, ORANGE])
+        d.rectangle((x, y, x + 3, y + 3), fill=rgba(mix(col, INK, 0.25)))
+    outline(im)
+    return save(im, name)
+
+
+def counter(name, seed):
+    im = new(48, 16)
+    d = ImageDraw.Draw(im)
+    bevel(d, (1, 2, 46, 13), WOOD_1, r=2)
+    d.rectangle((3, 4, 44, 7), fill=rgba(mix(WOOD_1, WHITE, 0.2)))
+    d.rectangle((34, 4, 44, 10), fill=rgba((64, 68, 72)))   # register
+    d.rectangle((36, 5, 41, 7), fill=rgba((150, 190, 160)))
+    outline(im)
+    return save(im, name)
+
+
+def pole(name, seed):
+    """Telephone pole seen from above: post + crossarm + insulators."""
+    im = new(28, 34)
+    d = ImageDraw.Draw(im)
+    # crossarm runs east-west
+    d.rectangle((2, 14, 25, 18), fill=rgba(WOOD_2))
+    d.line([(2, 14), (25, 14)], fill=rgba(mix(WOOD_2, WHITE, 0.3)))
+    d.line([(2, 18), (25, 18)], fill=rgba(WOOD_3))
+    for x in (5, 13, 21):
+        d.rectangle((x, 11, x + 2, 14), fill=rgba((70, 78, 86)))   # insulators
+        d.point((x, 11), fill=rgba((130, 160, 168)))
+    # post (round, seen from above) with lit cap
+    d.ellipse((10, 12, 17, 21), fill=rgba(WOOD_2))
+    d.ellipse((11, 13, 16, 18), fill=rgba(mix(WOOD_1, WHITE, 0.25)))
+    d.ellipse((12, 16, 16, 21), fill=rgba(WOOD_3))
+    outline(im)
+    return save(im, name)
+
+
+def wire(name):
+    im = new(12, 3)
+    d = ImageDraw.Draw(im)
+    d.line([(0, 1), (11, 1)], fill=rgba((26, 24, 28, 255)))
+    d.point((0, 0), fill=rgba((46, 44, 48, 200)))
+    return save(im, name)
+
+
+def street_lamp(name, seed):
+    im = new(16, 30)
+    d = ImageDraw.Draw(im)
+    d.rectangle((7, 10, 9, 28), fill=rgba((78, 80, 84)))          # pole
+    d.line([(7, 10), (7, 28)], fill=rgba((112, 114, 118)))
+    d.rectangle((6, 27, 10, 29), fill=rgba((60, 62, 66)))         # base
+    # lamp head with a glowing lens
+    bevel(d, (3, 2, 13, 12), (96, 98, 102), r=2)
+    d.rectangle((5, 5, 11, 10), fill=rgba((255, 214, 140)))
+    d.rectangle((6, 6, 10, 8), fill=rgba((255, 240, 200)))
+    outline(im)
+    return save(im, name)
+
+
+def traffic_light(name, seed):
+    im = new(14, 26)
+    d = ImageDraw.Draw(im)
+    d.rectangle((6, 16, 8, 24), fill=rgba((72, 74, 78)))
+    bevel(d, (2, 3, 12, 17), (60, 62, 60), r=2)
+    # three lenses: only the top (red) still glows
+    d.ellipse((4, 4, 10, 9), fill=rgba(RED))
+    d.point((6, 5), fill=rgba((255, 170, 150)))
+    d.ellipse((4, 9, 10, 13), fill=rgba((96, 76, 40)))
+    d.ellipse((4, 13, 10, 16), fill=rgba((46, 74, 52)))
+    outline(im)
+    return save(im, name)
+
+
+def road_sign(name, seed):
+    im = new(26, 34)
+    d = ImageDraw.Draw(im)
+    d.rectangle((11, 20, 14, 32), fill=rgba((116, 114, 108)))     # post
+    bevel(d, (1, 2, 24, 21), (74, 118, 84), r=2)
+    d.rectangle((3, 4, 22, 19), fill=rgba((60, 100, 70)))
+    d.line([(5, 15), (19, 7)], fill=rgba((216, 214, 206)))        # worn text
+    d.line([(5, 10), (15, 10)], fill=rgba((200, 198, 190)))
+    d.line([(5, 13), (13, 13)], fill=rgba((188, 186, 178)))
+    patch(im, 2, 3, 22, 18, (52, 64, 54), 0.3, seed, mode="rand")
+    outline(im)
+    return save(im, name)
+
+
+def gas_pump(name, seed):
+    rng = random.Random(seed)
+    im = new(20, 30)
+    d = ImageDraw.Draw(im)
+    bevel(d, (3, 3, 16, 26), (156, 152, 142), r=2)
+    d.rectangle((5, 6, 14, 13), fill=rgba((44, 50, 54)))          # display
+    d.rectangle((6, 7, 13, 11), fill=rgba((168, 196, 168)))
+    d.rectangle((4, 17, 15, 21), fill=rgba(RED))                   # branding band
+    d.line([(16, 14), (19, 18), (16, 24)], fill=rgba((36, 36, 38)))  # hose
+    for _ in range(5):
+        x, y = rng.randint(4, 15), rng.randint(4, 25)
+        r = rng.randint(1, 2)
+        d.ellipse((x - r, y - r, x + r, y + r), fill=rgba(RUST_2, 170))
+    outline(im)
+    return save(im, name)
+
+
+def dead_tree(name, seed):
+    """Bare tree seen from above: trunk rosette of branches."""
+    rng = random.Random(seed)
+    im = new(46, 46)
+    d = ImageDraw.Draw(im)
+    cx, cy = 23, 23
+    trunk = (92, 72, 54)
+    for i in range(9):
+        a = i / 9 * math.tau + rng.uniform(-0.15, 0.15)
+        ln = rng.randint(9, 19)
+        x1 = int(cx + math.cos(a) * ln)
+        y1 = int(cy + math.sin(a) * ln)
+        d.line([(cx, cy), (x1, y1)], fill=rgba(trunk), width=2)
+        for _ in range(2):
+            a2 = a + rng.uniform(-0.7, 0.7)
+            ln2 = rng.randint(5, 10)
+            d.line([(x1, y1), (int(x1 + math.cos(a2) * ln2),
+                               int(y1 + math.sin(a2) * ln2))],
+                   fill=rgba(mix(trunk, INK, 0.25)), width=1)
+    d.ellipse((cx - 4, cy - 4, cx + 4, cy + 4), fill=rgba(mix(trunk, WHITE, 0.22)))
+    for _ in range(6):   # stubborn dead leaves
+        x = rng.randint(6, 39)
+        y = rng.randint(6, 39)
+        if im.getpixel((x, y))[3] == 0:
+            continue
+        d.point((x, y), fill=rgba((146, 116, 70)))
+    outline(im)
+    return save(im, name)
+
+
+def yucca(name, seed, palm=False):
+    rng = random.Random(seed)
+    im = new(40, 40)
+    d = ImageDraw.Draw(im)
+    cx, cy = 20, 20
+    count = 11 if palm else 13
+    for i in range(count):
+        a = i / count * math.tau + rng.uniform(-0.1, 0.1)
+        ln = rng.randint(11, 17)
+        x1 = cx + math.cos(a) * ln
+        y1 = cy + math.sin(a) * ln
+        col = OLIVE_2 if i % 2 else DRYGRASS_1
+        if palm:
+            col = GREEN_R if i % 2 else OLIVE_2
+        d.line([(cx, cy), (int(x1), int(y1))], fill=rgba(col), width=2)
+        # barbs
+        d.point((int(cx + math.cos(a) * (ln - 3) + 1),
+                 int(cy + math.sin(a) * (ln - 3))), fill=rgba(mix(col, WHITE, 0.3)))
+    d.ellipse((cx - 3, cy - 3, cx + 3, cy + 3), fill=rgba(mix(OLIVE_3, INK, 0.3)))
+    outline(im, (22, 24, 18, 255))
+    return save(im, name)
+
+
+def shrub(name, seed):
+    rng = random.Random(seed)
+    im = new(22, 18)
+    d = ImageDraw.Draw(im)
+    blob(d, 11, 9, 9, 7, OLIVE_2, seed, alpha=255, steps=10)
+    blob(d, 9, 8, 6, 5, mix(OLIVE_2, DRYGRASS_1, 0.5), seed + 1, alpha=255, steps=8)
+    patch(im, 2, 2, 18, 14, OLIVE_3, 0.45, seed + 2, mode="checker")
+    speck(im, 8, seed + 3, [DRYGRASS_1, OLIVE_1], 1, 1, (80, 160))
+    outline(im, (24, 26, 20, 255))
+    return save(im, name)
+
+
+def rock(name, seed, size=(26, 22)):
+    rng = random.Random(seed)
+    w, h = size
+    im = new(w, h)
+    d = ImageDraw.Draw(im)
+    cx, cy = w // 2, h // 2
     pts = []
-    for k in range(8):
-        a = k / 8 * math.tau + math.pi / 8
-        pts.append((cx + math.cos(a) * S(106), cy + math.sin(a) * S(106)))
-    d.polygon([(x + S(4), y + S(5)) for x, y in pts], fill=(0, 0, 0, 120))
-    polygon(d, pts, STEEL_1, outline=STEEL_0, width=S(1.4))
-    for k in range(8):
-        a = k / 8 * math.tau + math.pi / 8
-        x = cx + math.cos(a) * S(96)
-        y = cy + math.sin(a) * S(96)
-        a2 = a + math.pi / 8
-        x2 = cx + math.cos(a2) * S(96)
-        y2 = cy + math.sin(a2) * S(96)
-        d.line([(x, y), (x2, y2)], fill=STEEL_3, width=S(1.2))
-        glow_dot(d, (x, y), 3.0, CYAN + (230,))
-    # panel ring
-    for k in range(8):
-        a = k / 8 * math.tau + math.pi / 8
-        x = cx + math.cos(a) * S(64)
-        y = cy + math.sin(a) * S(64)
-        d.line([(cx, cy), (x, y)], fill=STEEL_0, width=S(1.2))
-    # central command tower
-    bevel_rect(
-        d,
-        (cx - S(54), cy - S(54), cx + S(54), cy + S(54)),
-        STEEL_2,
-        radius=S(6),
-        width=S(1.4),
-    )
-    bevel_rect(
-        d,
-        (cx - S(44), cy - S(44), cx + S(44), cy + S(44)),
-        STEEL_3,
-        radius=S(5),
-        width=S(1.0),
-    )
-    # roof panels
-    d.polygon(
-        [
-            (cx - S(38), cy - S(26)),
-            (cx - S(20), cy - S(40)),
-            (cx + S(20), cy - S(40)),
-            (cx + S(38), cy - S(26)),
-            (cx + S(38), cy + S(26)),
-            (cx + S(20), cy + S(40)),
-            (cx - S(20), cy + S(40)),
-            (cx - S(38), cy + S(26)),
-        ],
-        fill=STEEL_2,
-        outline=STEEL_0,
-        width=S(0.8),
-    )
-    # landing hatch
-    d.ellipse((cx - S(22), cy - S(22), cx + S(22), cy + S(22)), fill=STEEL_0, outline=CYAN_D, width=S(1.4))
-    d.ellipse((cx - S(17), cy - S(17), cx + S(17), cy + S(17)), fill=STEEL_1)
-    d.line([(cx - S(10), cy), (cx + S(10), cy)], fill=CYAN + (220,), width=S(1.0))
-    d.line([(cx, cy - S(10)), (cx, cy + S(10))], fill=CYAN + (220,), width=S(1.0))
-    # radar dish
-    dx, dy = cx + S(56), cy - S(56)
-    d.ellipse((dx - S(20), dy - S(20), dx + S(20), dy + S(20)), fill=STEEL_0, outline=STEEL_4, width=S(1.2))
-    d.arc((dx - S(18), dy - S(18), dx + S(18), dy + S(18)), 200, 340, fill=GOLD, width=S(1.6))
-    d.line([(dx, dy), (dx + S(13), dy - S(13))], fill=STEEL_4, width=S(1.3))
-    glow_dot(d, (dx + S(13), dy - S(13)), 2.4, CYAN + (255,))
-    # antennae
-    for ox, oy in ((-52, -58), (52, 58), (-56, 52)):
-        x, y = cx + S(ox), cy + S(oy)
-        d.line([(x, y), (x + S(3), y - S(20))], fill=STEEL_4, width=S(1.0))
-        glow_dot(d, (x + S(3), y - S(20)), 2.0, RED + (230,))
-    # corner turret pods
-    for ox, oy in ((-78, -78), (78, -78), (-78, 78), (78, 78)):
-        x, y = cx + S(ox), cy + S(oy)
-        d.ellipse((x - S(12), y - S(12), x + S(12), y + S(12)), fill=STEEL_0)
-        d.ellipse((x - S(9), y - S(9), x + S(9), y + S(9)), fill=STEEL_3)
-        d.line([(x, y), (x, y - S(14))], fill=STEEL_5, width=S(2.2))
-        glow_dot(d, (x, y), 2.2, AMBER + (255,))
-    # pipes / grime
-    for _ in range(16):
-        x = random.uniform(cx - 90, cx + 90)
-        y = random.uniform(cy - 90, cy + 90)
-        d.line([(S(x), S(y)), (S(x + random.uniform(-18, 18)), S(y + random.uniform(-4, 4)))], fill=RUST_2 + (50,), width=S(0.7))
-    draw_noise(img, 8, 22)
-    finish(img, 256, 256, "hq_command.png")
+    for i in range(8):
+        a = i / 8 * math.tau
+        r = 0.6 + rng.random() * 0.35
+        pts.append((int(cx + math.cos(a) * (w / 2 - 2) * r),
+                    int(cy + math.sin(a) * (h / 2 - 2) * r)))
+    d.polygon(pts, fill=rgba((124, 120, 112)))
+    top = [(x, y - 2) for x, y in pts[:5]]
+    d.polygon(top, fill=rgba((152, 148, 138)))
+    for _ in range(8):
+        x, y = rng.randint(3, w - 4), rng.randint(3, h - 4)
+        if im.getpixel((x, y))[3] > 0:
+            d.point((x, y), fill=rgba((94, 90, 84)))
+    d.line([pts[4] + [pts[0]]][0] if False else pts + [pts[0]], fill=rgba((82, 78, 72)))
+    outline(im)
+    return save(im, name)
 
 
-def tower_base(name, accent=CYAN):
-    img = canvas(72, 72)
-    d = ImageDraw.Draw(img)
-    c = S(36)
-    # shadow ring
-    d.ellipse((c - S(33), c - S(33), c + S(33), c + S(33)), fill=(0, 0, 0, 80))
+def barrel(name, seed, col=RUST_2, band=YELLOW):
+    rng = random.Random(seed)
+    im = new(20, 22)
+    d = ImageDraw.Draw(im)
+    d.ellipse((2, 2, 17, 19), fill=rgba(col))
+    d.ellipse((3, 3, 16, 18), fill=rgba(mix(col, WHITE, 0.18)))
+    d.ellipse((5, 5, 14, 16), fill=rgba(mix(col, INK, 0.2)))
+    d.ellipse((7, 7, 12, 14), fill=rgba(mix(col, INK, 0.45)))   # bung hole
+    d.arc((2, 2, 17, 19), 200, 340, fill=rgba(mix(col, WHITE, 0.4)))
+    d.rectangle((3, 10, 16, 13), fill=rgba(band))               # hazard band
+    for _ in range(5):
+        x, y = rng.randint(4, 15), rng.randint(4, 17)
+        if im.getpixel((x, y))[3] > 0:
+            d.point((x, y), fill=rgba(RUST_1))
+    outline(im)
+    return save(im, name)
+
+
+def crate(name, seed, wood=False):
+    rng = random.Random(seed)
+    im = new(24, 24)
+    d = ImageDraw.Draw(im)
+    if wood:
+        bevel(d, (2, 2, 21, 21), WOOD_1, r=1)
+        d.line([(3, 3), (20, 20)], fill=rgba(WOOD_3))
+        d.line([(20, 3), (3, 20)], fill=rgba(WOOD_3))
+        d.rectangle((2, 10, 21, 13), fill=rgba(mix(WOOD_1, WHITE, 0.2)))
+    else:
+        bevel(d, (2, 2, 21, 21), (96, 106, 114), r=1)
+        d.line([(4, 4), (19, 19)], fill=rgba((70, 78, 86)))
+        d.line([(19, 4), (4, 19)], fill=rgba((70, 78, 86)))
+        d.rectangle((7, 10, 16, 14), fill=rgba(YELLOW))
+        d.point((8, 11), fill=rgba(mix(YELLOW, WHITE, 0.5)))
+    for _ in range(5):
+        x, y = rng.randint(3, 19), rng.randint(3, 19)
+        d.point((x, y), fill=rgba(RUST_1 if not wood else WOOD_3))
+    outline(im)
+    return save(im, name)
+
+
+def tire_pile(name, seed):
+    im = new(24, 20)
+    d = ImageDraw.Draw(im)
+    for i, (dx, dy) in enumerate(((0, 0), (5, 3), (-3, 6))):
+        x, y = 12 + dx, 10 + dy
+        r = 8 - i
+        d.ellipse((x - r, y - r, x + r, y + r), fill=rgba((36, 36, 40)))
+        d.ellipse((x - r + 2, y - r + 2, x + r - 2, y + r - 2),
+                  fill=rgba((56, 56, 60)))
+        d.ellipse((x - 3, y - 3, x + 3, y + 3), fill=rgba((24, 24, 28)))
+        d.arc((x - r, y - r, x + r, y + r), 180, 320, fill=rgba((78, 78, 84)))
+    outline(im)
+    return save(im, name)
+
+
+def debris_pile(name, seed):
+    rng = random.Random(seed)
+    im = new(34, 28)
+    d = ImageDraw.Draw(im)
+    blob(d, 17, 15, 15, 11, (104, 96, 84), seed, alpha=255, steps=12)
+    for _ in range(30):
+        x, y = rng.randint(3, 30), rng.randint(4, 25)
+        r = rng.randint(1, 3)
+        col = rng.choice([CONCRETE_2, RUST_2, (154, 142, 118), (86, 84, 80),
+                          BRICK_2, OLIVE_2])
+        d.rectangle((x, y, x + r, y + r), fill=rgba(col))
+        d.point((x, y), fill=rgba(mix(col, WHITE, 0.3)))
+    for _ in range(4):   # twisted rebar
+        x, y = rng.randint(6, 28), rng.randint(6, 22)
+        d.line([(x, y), (x + rng.randint(-8, 8), y + rng.randint(-6, 6))],
+               fill=rgba(RUST_3), width=1)
+    outline(im)
+    return save(im, name)
+
+
+def barrier(name, seed):
+    im = new(36, 14)
+    d = ImageDraw.Draw(im)
+    bevel(d, (1, 3, 34, 12), CONCRETE_2, r=2)
+    d.rectangle((2, 4, 33, 6), fill=rgba(CONCRETE_1))
+    x = 3
+    while x < 32:
+        d.polygon([(x, 11), (x + 4, 11), (x + 7, 5), (x + 3, 5)],
+                  fill=rgba(YELLOW))
+        d.polygon([(x + 4, 11), (x + 8, 11), (x + 11, 5), (x + 7, 5)],
+                  fill=rgba((52, 50, 48)))
+        x += 8
+    outline(im)
+    return save(im, name)
+
+
+def sandbags(name, seed):
+    rng = random.Random(seed)
+    im = new(42, 18)
+    d = ImageDraw.Draw(im)
+    for row, y in enumerate((3, 9)):
+        x = 2 + (3 if row else 0)
+        while x < 38:
+            col = rng.choice([OLIVE_1, OLIVE_2, OLIVE_3, (104, 110, 80)])
+            d.rectangle((x, y, x + 11, y + 7), fill=rgba(col))
+            d.line([(x + 1, y + 1), (x + 10, y + 1)],
+                   fill=rgba(mix(col, WHITE, 0.3)))
+            d.line([(x + 1, y + 6), (x + 10, y + 6)],
+                   fill=rgba(mix(col, INK, 0.45)))
+            x += 11
+    outline(im)
+    return save(im, name)
+
+# ---------------------------------------------------------------------------
+# characters -- 24x36, 3/4 top-down: 0=down, 1=left, 2=up, 3=right
+# ---------------------------------------------------------------------------
+def _legs(d, facing, frame, pant, boot):
+    """Walk cycle: frame 0 left leg leads, frame 1 right leg leads."""
+    if facing == "side":
+        back0 = 26 if frame == 0 else 28
+        front0 = 28 if frame == 0 else 26
+        d.rectangle((7, back0, 11, back0 + 6), fill=rgba(pant))
+        d.rectangle((7, back0 + 5, 11, back0 + 6), fill=rgba(boot))
+        d.rectangle((13, front0, 17, front0 + 6), fill=rgba(pant))
+        d.rectangle((13, front0 + 5, 17, front0 + 6), fill=rgba(boot))
+    else:
+        lead = 28 if frame == 0 else 26
+        trail = 26 if frame == 0 else 28
+        d.rectangle((7, trail, 11, trail + 6), fill=rgba(pant))
+        d.rectangle((7, trail + 5, 11, trail + 6), fill=rgba(boot))
+        d.rectangle((13, lead, 17, lead + 6), fill=rgba(pant))
+        d.rectangle((13, lead + 5, 17, lead + 6), fill=rgba(boot))
+
+
+def draw_survivor(im, facing, frame):
+    d = ImageDraw.Draw(im)
+    _legs(d, facing, frame, LEATHER_2, (56, 44, 36))
+    if facing == "side":
+        # duster seen in profile
+        bevel(d, (7, 15, 17, 29), LEATHER_1, r=3)
+        d.rectangle((14, 17, 16, 27), fill=rgba(LEATHER_2))
+        d.rectangle((15, 16, 21, 19), fill=rgba(LEATHER_1))       # forward arm
+        d.rectangle((19, 16, 21, 18), fill=rgba(SKIN_2))          # hand
+        d.rectangle((7, 17, 9, 25), fill=rgba(LEATHER_2))         # back arm
+        # head + wide brim, face to the right
+        d.ellipse((3, 4, 21, 15), fill=rgba(LEATHER_2))           # brim
+        d.ellipse((4, 5, 20, 14), fill=rgba((110, 84, 56)))
+        d.rectangle((15, 9, 19, 14), fill=rgba(SKIN_1))           # face
+        d.point((18, 11), fill=rgba(INK))
+        d.ellipse((8, 5, 17, 12), fill=rgba((96, 74, 50)))        # crown
+        d.line([(9, 6), (16, 6)], fill=rgba((126, 98, 66)))
+    else:
+        back = facing == "up"
+        bevel(d, (5, 15, 18, 29), LEATHER_1, r=4)                 # duster
+        d.rectangle((11, 16, 12, 28), fill=rgba(LEATHER_2))       # coat seam
+        d.rectangle((3, 16, 6, 25), fill=rgba(LEATHER_1))         # arms
+        d.rectangle((17, 16, 20, 25), fill=rgba(LEATHER_1))
+        d.rectangle((3, 24, 6, 25), fill=rgba(SKIN_2))            # hands
+        d.rectangle((17, 24, 20, 25), fill=rgba(SKIN_2))
+        if back:
+            bevel(d, (8, 17, 15, 25), OLIVE_1, r=2)               # pack
+            d.line([(8, 21), (15, 21)], fill=rgba(OLIVE_3))
+            d.rectangle((7, 16, 16, 18), fill=rgba(LEATHER_2))    # collar
+        else:
+            d.rectangle((9, 16, 14, 20), fill=rgba((62, 54, 46)))  # shirt
+        # wide-brim hat
+        d.ellipse((3, 3, 20, 16), fill=rgba(LEATHER_2))           # brim
+        d.ellipse((4, 4, 19, 15), fill=rgba((110, 84, 56)))
+        d.ellipse((7, 4, 16, 13), fill=rgba((96, 74, 50)))        # crown
+        d.line([(8, 5), (15, 5)], fill=rgba((126, 98, 66)))
+        if not back:
+            d.rectangle((9, 12, 14, 16), fill=rgba(SKIN_1))       # face
+            d.point((10, 13), fill=rgba(INK))
+            d.point((13, 13), fill=rgba(INK))
+    noise(im, 4, 7)
+
+
+def draw_raider(im, facing, frame):
+    d = ImageDraw.Draw(im)
+    _legs(d, facing, frame, (62, 64, 70), (38, 38, 42))
+    if facing == "side":
+        bevel(d, (7, 15, 17, 29), (86, 92, 96), r=3)              # vest
+        d.rectangle((7, 17, 17, 20), fill=rgba((62, 66, 70)))
+        d.rectangle((14, 16, 21, 19), fill=rgba(SKIN_2))          # forward arm
+        d.rectangle((7, 17, 9, 25), fill=rgba(LEATHER_2))         # back arm
+        d.ellipse((10, 5, 19, 15), fill=rgba(SKIN_2))             # head
+        d.ellipse((10, 5, 19, 10), fill=rgba(HAIR_2))             # hair
+        d.rectangle((11, 10, 19, 12), fill=rgba(RED_D))           # headband
+        d.point((17, 13), fill=rgba(INK))                         # eye
+        d.line([(14, 14), (18, 14)], fill=rgba(SKIN_3))           # jaw
+    else:
+        back = facing == "up"
+        bevel(d, (5, 15, 18, 29), (86, 92, 96), r=4)              # vest
+        d.rectangle((6, 18, 17, 26), fill=rgba((60, 64, 68)))     # plate
+        d.line([(6, 22), (17, 22)], fill=rgba((44, 46, 50)))
+        d.rectangle((3, 15, 7, 22), fill=rgba(LEATHER_2))         # pads
+        d.rectangle((16, 15, 20, 22), fill=rgba(LEATHER_2))
+        d.rectangle((3, 22, 6, 26), fill=rgba(SKIN_2))            # arms
+        d.rectangle((17, 22, 20, 26), fill=rgba(SKIN_2))
+        # head
+        d.ellipse((7, 5, 16, 17), fill=rgba(SKIN_2))
+        d.ellipse((7, 5, 16, 10), fill=rgba(HAIR_2))
+        d.rectangle((7, 10, 16, 12), fill=rgba(RED_D))            # headband
+        if back:
+            d.ellipse((8, 6, 15, 12), fill=rgba(HAIR_2))
+        else:
+            d.point((10, 14), fill=rgba(INK))
+            d.point((13, 14), fill=rgba(INK))
+            d.line([(10, 16), (13, 16)], fill=rgba(SKIN_3))
+    noise(im, 4, 13)
+
+
+def draw_infected(im, facing, frame):
+    d = ImageDraw.Draw(im)
+    _legs(d, facing, frame, MUTANT_3, (74, 84, 58))
+    if facing == "side":
+        # hunched silhouette, skull thrust forward
+        bevel(d, (5, 14, 16, 29), MUTANT_2, r=3)
+        for y in (17, 20, 23, 26):
+            d.line([(7, y), (14, y)], fill=rgba(MUTANT_3))
+        d.rectangle((13, 14, 21, 18), fill=rgba(MUTANT_2))        # reaching arm
+        d.rectangle((19, 14, 21, 16), fill=rgba((206, 202, 176))) # claws
+        d.ellipse((11, 5, 21, 15), fill=rgba(MUTANT_1))           # skull
+        d.rectangle((17, 8, 21, 12), fill=rgba(MUTANT_2))
+        d.point((19, 9), fill=rgba(YELLOW))                       # eye
+        d.line([(17, 13), (21, 13)], fill=rgba((60, 66, 44)))     # jaw
+    else:
+        back = facing == "up"
+        bevel(d, (5, 14, 18, 29), MUTANT_2, r=4)
+        for y in (17, 20, 23, 26):
+            d.line([(7, y), (16, y)], fill=rgba(MUTANT_3))        # ribs
+        d.rectangle((2, 15, 6, 27), fill=rgba(MUTANT_2))          # arms
+        d.rectangle((17, 15, 21, 27), fill=rgba(MUTANT_2))
+        d.rectangle((2, 26, 5, 27), fill=rgba((206, 202, 176)))   # claws
+        d.rectangle((18, 26, 21, 27), fill=rgba((206, 202, 176)))
+        d.ellipse((7, 5, 16, 17), fill=rgba(MUTANT_1))
+        d.ellipse((8, 6, 15, 12), fill=rgba(MUTANT_2))
+        if back:
+            d.line([(9, 8), (14, 8)], fill=rgba(MUTANT_3))
+        else:
+            d.point((9, 12), fill=rgba(YELLOW))
+            d.point((14, 12), fill=rgba(YELLOW))
+            d.rectangle((9, 14, 14, 16), fill=rgba((52, 58, 40)))
+    noise(im, 5, 23)
+
+
+FACINGS = ("down", "side", "up", "side")   # index 0=down 1=left 2=up 3=right
+
+
+def character_frames(prefix, draw_fn):
+    names = []
+    for dir_index in range(4):
+        for frame in (0, 1):
+            im = new(24, 36)
+            draw_fn(im, FACINGS[dir_index], frame)
+            if dir_index == 1:     # left = mirrored right-facing body
+                im = im.transpose(Image.FLIP_LEFT_RIGHT)
+            outline(im)
+            names.append(save(im, f"{prefix}_{dir_index}_{frame}.png"))
+    return names
+
+
+def gun_overlay(name, sleeve, metal=(62, 62, 68), stock=(86, 62, 40)):
+    """Rifle drawn pointing east; pivot = sprite centre (16, 6)."""
+    im = new(32, 12)
+    d = ImageDraw.Draw(im)
+    d.polygon([(3, 5), (13, 5), (13, 9), (3, 8)], fill=rgba(stock))     # stock
+    d.line([(4, 5), (12, 5)], fill=rgba(mix(stock, WHITE, 0.3)))
+    bevel(d, (12, 4, 23, 9), metal, r=1)                                 # receiver
+    d.rectangle((17, 9, 21, 11), fill=rgba((44, 44, 48)))                # magazine
+    d.rectangle((14, 8, 17, 11), fill=rgba((50, 50, 54)))                # grip
+    d.rectangle((23, 5, 30, 7), fill=rgba((42, 42, 46)))                 # barrel
+    d.rectangle((29, 4, 31, 8), fill=rgba((36, 36, 40)))                 # muzzle
+    d.rectangle((18, 2, 20, 4), fill=rgba((48, 48, 52)))                 # sight
+    d.line([(13, 4), (22, 4)], fill=rgba(mix(metal, WHITE, 0.35)))
+    d.rectangle((12, 6, 17, 10), fill=rgba(sleeve))                      # hands
+    d.point((13, 7), fill=rgba(mix(sleeve, WHITE, 0.25)))
+    outline(im)
+    return save(im, name)
+
+# ---------------------------------------------------------------------------
+# fx
+# ---------------------------------------------------------------------------
+def jagged(d, cx, cy, r, color, seed, points=14, jitter=0.45):
+    rng = random.Random(seed)
     pts = []
-    for k in range(8):
-        a = k / 8 * math.tau + math.pi / 8
-        pts.append((c + math.cos(a) * S(30), c + math.sin(a) * S(30)))
-    polygon(d, pts, STEEL_1, outline=STEEL_0, width=S(1.0))
-    pts2 = []
-    for k in range(8):
-        a = k / 8 * math.tau + math.pi / 8
-        pts2.append((c + math.cos(a) * S(23), c + math.sin(a) * S(23)))
-    polygon(d, pts2, STEEL_2, outline=STEEL_3, width=S(0.6))
-    d.ellipse((c - S(14), c - S(14), c + S(14), c + S(14)), fill=STEEL_0, outline=accent + (180,), width=S(1.2))
-    for k in range(4):
-        a = k / 4 * math.tau + math.pi / 4
-        x = c + math.cos(a) * S(26)
-        y = c + math.sin(a) * S(26)
-        glow_dot(d, (x, y), 2.3, accent + (220,))
-    for ox, oy in ((-28, -28), (28, -28), (-28, 28), (28, 28)):
-        glow_dot(d, (c + S(ox), c + S(oy)), 1.2, STEEL_4)
-    draw_noise(img, 7, 30)
-    finish(img, 72, 72, name)
+    for i in range(points):
+        a = i / points * math.tau
+        rr = r * (1.0 - jitter / 2 + rng.random() * jitter)
+        pts.append((cx + math.cos(a) * rr, cy + math.sin(a) * rr))
+    d.polygon(pts, fill=rgba(color))
 
 
-def gauss_head():
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    c = S(32)
-    # mounting ring
-    d.ellipse((c - S(20), c - S(20), c + S(20), c + S(20)), fill=STEEL_0)
-    d.ellipse((c - S(17), c - S(17), c + S(17), c + S(17)), fill=STEEL_3)
-    # body
-    bevel_rect(d, (c - S(14), c - S(20), c + S(14), c + S(14)), STEEL_2, radius=S(4), width=S(0.8))
-    # twin barrels
-    for ox in (-8, 8):
-        d.rounded_rectangle(
-            (c + S(ox - 3), c - S(31), c + S(ox + 3), c - S(4)),
-            radius=S(1.5),
-            fill=STEEL_4,
-            outline=STEEL_0,
-            width=S(0.6),
-        )
-        d.line([(c + S(ox - 1), c - S(30)), (c + S(ox - 1), c - S(8))], fill=STEEL_5, width=S(0.5))
-        glow_dot(d, (c + S(ox), c - S(30)), 1.4, CYAN + (255,))
-    # sensor eye
-    glow_dot(d, (c, c + S(2)), 4.2, CYAN + (255,))
-    d.rectangle((c - S(10), c + S(10), c + S(10), c + S(13)), fill=STEEL_0)
-    draw_noise(img, 5, 31)
-    finish(img, 64, 64, "tower_gauss_head.png")
+def bullet(name):
+    im = new(10, 4)
+    d = ImageDraw.Draw(im)
+    d.rectangle((1, 1, 8, 2), fill=rgba((255, 226, 150)))
+    d.rectangle((3, 1, 7, 1), fill=rgba(WHITE))
+    d.point((9, 1), fill=rgba((255, 244, 200)))
+    return save(im, name)
 
 
-def missile_head():
-    img = canvas(72, 72)
-    d = ImageDraw.Draw(img)
-    c = S(36)
-    d.ellipse((c - S(22), c - S(22), c + S(22), c + S(22)), fill=STEEL_0)
-    d.ellipse((c - S(19), c - S(19), c + S(19), c + S(19)), fill=STEEL_3)
-    bevel_rect(d, (c - S(19), c - S(22), c + S(19), c + S(16)), STEEL_2, radius=S(4), width=S(0.8))
-    # missile pod 2x2
-    for i in range(2):
-        for j in range(2):
-            x = c - S(12) + i * S(13)
-            y = c - S(18) + j * S(11)
-            d.rounded_rectangle((x, y, x + S(10), y + S(9)), radius=S(2), fill=STEEL_0, outline=STEEL_4, width=S(0.5))
-            d.ellipse((x + S(2), y + S(1), x + S(8), y + S(7)), fill=(40, 38, 34, 255), outline=AMBER + (200,), width=S(0.5))
-            glow_dot(d, (x + S(5), y + S(4)), 1.2, AMBER + (255,))
-    # side vents
-    for ox in (-22, 22):
-        d.rectangle((c + S(ox) - S(3), c - S(8), c + S(ox) + S(3), c + S(8)), fill=STEEL_0)
-        for k in range(4):
-            d.line([(c + S(ox) - S(2), c - S(6) + k * S(3)), (c + S(ox) + S(2), c - S(6) + k * S(3))], fill=STEEL_4, width=S(0.5))
-    glow_dot(d, (c, c + S(3)), 2.6, AMBER + (255,))
-    draw_noise(img, 5, 32)
-    finish(img, 72, 72, "tower_missile_head.png")
+def tracer(name):
+    im = new(16, 2)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 15, 1), fill=rgba(WHITE))
+    return save(im, name)
 
 
-def arc_head():
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    c = S(32)
-    d.ellipse((c - S(20), c - S(20), c + S(20), c + S(20)), fill=STEEL_0)
-    d.ellipse((c - S(17), c - S(17), c + S(17), c + S(17)), fill=STEEL_3)
-    # prongs
-    for a in (0, 2.1, 4.2):
-        x = c + math.cos(a) * S(12)
-        y = c + math.sin(a) * S(12)
-        d.line([(c, c), (x, y)], fill=STEEL_4, width=S(3.0))
-        glow_dot(d, (x, y), 3.0, CYAN + (255,))
-    # orb
-    glow_dot(d, (c, c), 9.0, CYAN + (255,), core=CYAN_L)
-    d.ellipse((c - S(4), c - S(4), c + S(4), c + S(4)), fill=CYAN_L)
-    for _ in range(10):
-        a = random.uniform(0, math.tau)
-        r0 = random.uniform(8, 13)
-        r1 = random.uniform(15, 21)
-        d.line(
-            [(c + math.cos(a) * S(r0), c + math.sin(a) * S(r0)), (c + math.cos(a + 0.4) * S(r1), c + math.sin(a + 0.4) * S(r1))],
-            fill=CYAN + (150,),
-            width=S(0.6),
-        )
-    draw_noise(img, 4, 33)
-    finish(img, 64, 64, "tower_arc_head.png")
+def muzzle_flash(name):
+    im = new(24, 24)
+    d = ImageDraw.Draw(im)
+    c = 12
+    jagged(d, c, c, 10, (255, 196, 96), 5, points=8, jitter=0.7)
+    jagged(d, c, c, 6, (255, 240, 190), 6, points=8, jitter=0.6)
+    d.rectangle((c + 2, c - 1, c + 11, c + 1), fill=rgba((255, 226, 150)))
+    d.point((c, c), fill=rgba(WHITE))
+    return save(im, name)
 
 
-def relay():
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    c = S(32)
-    d.ellipse((c - S(27), c - S(27), c + S(27), c + S(27)), fill=(0, 0, 0, 80))
-    pts = []
-    for k in range(6):
-        a = k / 6 * math.tau + math.pi / 6
-        pts.append((c + math.cos(a) * S(24), c + math.sin(a) * S(24)))
-    polygon(d, pts, STEEL_1, outline=STEEL_0, width=S(0.9))
-    d.ellipse((c - S(16), c - S(16), c + S(16), c + S(16)), fill=STEEL_2, outline=STEEL_4, width=S(0.8))
-    # pylon
-    d.polygon(
-        [
-            (c - S(8), c + S(6)),
-            (c - S(4), c - S(18)),
-            (c + S(4), c - S(18)),
-            (c + S(8), c + S(6)),
-        ],
-        fill=STEEL_3,
-        outline=STEEL_0,
-        width=S(0.6),
-    )
-    glow_dot(d, (c, c - S(16)), 6.0, CYAN + (255,), core=CYAN_L)
-    for k in range(3):
-        a = -math.pi / 2 + (k - 1) * 2.1
-        x = c + math.cos(a) * S(17)
-        y = c + math.sin(a) * S(17)
-        glow_dot(d, (x, y), 2.4, CYAN + (220,))
-    draw_noise(img, 5, 34)
-    finish(img, 64, 64, "relay.png")
+def casing(name):
+    im = new(5, 3)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 4, 2), fill=rgba((214, 176, 92)))
+    d.point((1, 0), fill=rgba((244, 214, 130)))
+    return save(im, name)
 
 
-# ---------------------------------------------------------------------------
-# units
-# ---------------------------------------------------------------------------
-def goliath_legs(frame):
-    img = canvas(80, 80)
-    d = ImageDraw.Draw(img)
-    c = S(40)
-    swing = S(4) if frame == 0 else -S(4)
-    # shadow
-    d.ellipse((c - S(29), c - S(24), c + S(29), c + S(24)), fill=(0, 0, 0, 70))
-    # legs: side pods, alternating
-    for side, sign in ((0, -1), (1, 1)):
-        ox = sign * S(23)
-        oy = swing if side == 0 else -swing
-        # upper leg
-        d.rounded_rectangle(
-            (c + ox - S(9), c - S(20) + oy, c + ox + S(9), c + S(18) - oy),
-            radius=S(4),
-            fill=STEEL_2,
-            outline=STEEL_0,
-            width=S(1.0),
-        )
-        # knee / foot
-        d.ellipse((c + ox - S(10), c + S(11) - oy, c + ox + S(10), c + S(30) - oy), fill=STEEL_1, outline=STEEL_0, width=S(0.8))
-        d.rounded_rectangle(
-            (c + ox - S(8), c + S(20) - oy, c + ox + S(8), c + S(30) - oy),
-            radius=S(3),
-            fill=STEEL_3,
-            outline=STEEL_0,
-            width=S(0.6),
-        )
-        d.line([(c + ox, c - S(17) + oy), (c + ox, c + S(12) - oy)], fill=STEEL_4, width=S(0.8))
-        glow_dot(d, (c + ox, c + S(26) - oy), 2.0, CYAN + (220,))
-    # hip / lower chassis
-    d.ellipse((c - S(18), c - S(19), c + S(18), c + S(19)), fill=STEEL_1, outline=STEEL_0, width=S(1.0))
-    d.ellipse((c - S(14), c - S(15), c + S(14), c + S(15)), fill=STEEL_3)
-    # rear thruster
-    d.rectangle((c - S(7), c + S(13), c + S(7), c + S(20)), fill=STEEL_0)
-    for k in range(3):
-        d.line([(c - S(5), c + S(15) + k * S(2)), (c + S(5), c + S(15) + k * S(2))], fill=CYAN + (140,), width=S(0.5))
-    draw_noise(img, 6, 40 + frame)
-    finish(img, 80, 80, f"goliath_legs_{frame + 1}.png")
+def soft_puff(name, size, color, peak=160, power=2.4):
+    return banded_glow(name, size, color, peak, power=power)
 
 
-def goliath_torso():
-    img = canvas(80, 80)
-    d = ImageDraw.Draw(img)
-    c = S(40)
-    # shoulder armor
-    for sign in (-1, 1):
-        x = c + sign * S(22)
-        d.ellipse((x - S(13), c - S(14), x + S(13), c + S(18)), fill=STEEL_1, outline=STEEL_0, width=S(1.0))
-        d.ellipse((x - S(10), c - S(11), x + S(10), c + S(15)), fill=STEEL_3)
-        d.arc((x - S(10), c - S(11), x + S(10), c + S(15)), 200, 340, fill=STEEL_5, width=S(0.8))
-    # cockpit
-    d.ellipse((c - S(18), c - S(20), c + S(18), c + S(16)), fill=STEEL_2, outline=STEEL_0, width=S(1.1))
-    # visor
-    d.rounded_rectangle((c - S(11), c - S(11), c + S(11), c - S(2)), radius=S(3), fill=(8, 16, 22, 255), outline=CYAN_D, width=S(0.7))
-    d.rounded_rectangle((c - S(9), c - S(9), c + S(9), c - S(4)), radius=S(2), fill=CYAN + (210,))
-    d.line([(c - S(8), c - S(7)), (c + S(8), c - S(7))], fill=WHITE + (200,), width=S(0.6))
-    # twin cannons
-    for ox in (-12, 12):
-        d.rounded_rectangle(
-            (c + S(ox - 4), c - S(32), c + S(ox + 4), c - S(7)),
-            radius=S(2),
-            fill=STEEL_3,
-            outline=STEEL_0,
-            width=S(0.7),
-        )
-        d.rectangle((c + S(ox - 2), c - S(32), c + S(ox + 2), c - S(26)), fill=STEEL_5)
-        d.line([(c + S(ox - 2), c - S(28)), (c + S(ox + 2), c - S(28))], fill=(0, 0, 0, 180), width=S(0.5))
-    # team stripe
-    d.rectangle((c - S(15), c + S(11), c + S(15), c + S(15)), fill=BLUE + (230,))
-    # antenna
-    d.line([(c + S(16), c - S(4)), (c + S(19), c - S(22))], fill=STEEL_5, width=S(0.7))
-    glow_dot(d, (c + S(19), c - S(22)), 1.4, CYAN + (255,))
-    draw_noise(img, 6, 41)
-    finish(img, 80, 80, "goliath_torso.png")
+def spark(name):
+    im = new(3, 3)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 2, 2), fill=rgba((255, 224, 150)))
+    d.point((1, 1), fill=rgba(WHITE))
+    return save(im, name)
 
 
-def zergling():
-    img = canvas(56, 56)
-    d = ImageDraw.Draw(img)
-    c = S(28)
-    # legs
-    for sign in (-1, 1):
-        for k in range(2):
-            x = c + sign * S(10) + sign * S(k * 6)
-            y = c + (k - 0.5) * S(15)
-            d.line([(c, c), (x + sign * S(11), y + S(4))], fill=PURPLE_0, width=S(4.0))
-            d.line([(c, c), (x + sign * S(11), y + S(4))], fill=PURPLE_2, width=S(2.2))
-            d.ellipse((x + sign * S(8), y + S(1), x + sign * S(15), y + S(8)), fill=PURPLE_0, outline=PURPLE_3, width=S(0.5))
-    # body
-    d.ellipse((c - S(15), c - S(12), c + S(15), c + S(12)), fill=PURPLE_1, outline=PURPLE_0, width=S(1.0))
-    d.ellipse((c - S(11), c - S(8), c + S(11), c + S(8)), fill=PURPLE_2)
-    # carapace ridges
-    for k in range(4):
-        x = c - S(8) + k * S(5)
-        d.arc((x - S(3), c - S(8), x + S(3), c + S(8)), 90, 270, fill=PURPLE_4, width=S(0.8))
-    # head / jaws
-    d.polygon(
-        [
-            (c + S(13), c - S(7)),
-            (c + S(25), c - S(3)),
-            (c + S(27), c),
-            (c + S(25), c + S(3)),
-            (c + S(13), c + S(7)),
-        ],
-        fill=PURPLE_1,
-        outline=PURPLE_0,
-        width=S(0.8),
-    )
-    for oy in (-1, 1):
-        d.line([(c + S(20), c + oy * S(2)), (c + S(29), c + oy * S(5))], fill=BONE + (220,), width=S(1.2))
-    glow_dot(d, (c + S(19), c - S(2)), 2.0, ZERG_GREEN + (255,))
-    glow_dot(d, (c + S(19), c + S(2)), 2.0, ZERG_GREEN + (255,))
-    draw_noise(img, 8, 50)
-    finish(img, 56, 56, "enemy_zergling.png")
-
-
-def hydralisk():
-    img = canvas(72, 72)
-    d = ImageDraw.Draw(img)
-    c = S(36)
-    # tail coils
-    for k in range(3):
-        a = k * 0.9
-        d.arc(
-            (c - S(22 + k * 3), c - S(14 + k * 2), c + S(10 + k * 3), c + S(24 + k * 2)),
-            40,
-            320,
-            fill=PURPLE_1,
-            width=S(4.0 - k * 0.5),
-        )
-    # body
-    d.ellipse((c - S(18), c - S(14), c + S(16), c + S(14)), fill=PURPLE_1, outline=PURPLE_0, width=S(1.0))
-    d.ellipse((c - S(13), c - S(10), c + S(11), c + S(10)), fill=PURPLE_2)
-    # hood
-    d.polygon(
-        [
-            (c + S(8), c - S(12)),
-            (c + S(28), c - S(18)),
-            (c + S(31), c - S(5)),
-            (c + S(27), c + S(5)),
-            (c + S(8), c + S(12)),
-        ],
-        fill=PURPLE_1,
-        outline=PURPLE_0,
-        width=S(0.9),
-    )
-    for k in range(4):
-        d.line(
-            [(c + S(11), c - S(8) + k * S(5)), (c + S(27), c - S(12) + k * S(5))],
-            fill=PURPLE_3 + (220,),
-            width=S(0.8),
-        )
-    # scythes
-    for sign in (-1, 1):
-        d.line(
-            [(c + S(6), c + sign * S(8)), (c + S(20), c + sign * S(22))],
-            fill=PURPLE_0,
-            width=S(3.2),
-        )
-        d.line(
-            [(c + S(20), c + sign * S(22)), (c + S(32), c + sign * S(30))],
-            fill=BONE + (230,),
-            width=S(1.8),
-        )
-        d.line(
-            [(c + S(20), c + sign * S(22)), (c + S(33), c + sign * S(24))],
-            fill=BONE + (200,),
-            width=S(1.2),
-        )
-    glow_dot(d, (c + S(21), c - S(4)), 2.4, ZERG_GREEN + (255,))
-    glow_dot(d, (c + S(21), c + S(4)), 2.4, ZERG_GREEN + (255,))
-    draw_noise(img, 8, 51)
-    finish(img, 72, 72, "enemy_hydralisk.png")
-
-
-def ultralisk():
-    img = canvas(104, 104)
-    d = ImageDraw.Draw(img)
-    c = S(52)
-    # legs
-    for sign in (-1, 1):
-        for k in range(2):
-            x = c + sign * S(22)
-            y = c + (k - 0.5) * S(28)
-            d.line([(c, c), (x + sign * S(18), y + S(8))], fill=PURPLE_0, width=S(8.0))
-            d.line([(c, c), (x + sign * S(18), y + S(8))], fill=PURPLE_2, width=S(4.0))
-            d.ellipse(
-                (x + sign * S(12), y + S(2), x + sign * S(24), y + S(14)),
-                fill=PURPLE_0,
-                outline=PURPLE_3,
-                width=S(0.7),
-            )
-    # huge carapace
-    d.ellipse((c - S(34), c - S(28), c + S(30), c + S(28)), fill=PURPLE_1, outline=PURPLE_0, width=S(1.4))
-    d.ellipse((c - S(28), c - S(22), c + S(24), c + S(22)), fill=PURPLE_2)
-    for k in range(5):
-        d.arc(
-            (c - S(24) + k * S(8), c - S(20), c - S(4) + k * S(8), c + S(20)),
-            100,
-            260,
-            fill=PURPLE_3,
-            width=S(1.4),
-        )
-    # head
-    d.polygon(
-        [
-            (c + S(22), c - S(18)),
-            (c + S(47), c - S(10)),
-            (c + S(50), c),
-            (c + S(47), c + S(10)),
-            (c + S(22), c + S(18)),
-        ],
-        fill=PURPLE_1,
-        outline=PURPLE_0,
-        width=S(1.0),
-    )
-    # tusks
-    for sign in (-1, 1):
-        d.line(
-            [(c + S(37), c + sign * S(8)), (c + S(54), c + sign * S(23))],
-            fill=BONE + (235,),
-            width=S(2.6),
-        )
-        d.line(
-            [(c + S(42), c + sign * S(3)), (c + S(55), c + sign * S(10))],
-            fill=BONE + (220,),
-            width=S(1.8),
-        )
-    glow_dot(d, (c + S(34), c - S(5)), 3.0, ZERG_GREEN + (255,))
-    glow_dot(d, (c + S(34), c + S(5)), 3.0, ZERG_GREEN + (255,))
-    draw_noise(img, 10, 52)
-    finish(img, 104, 104, "enemy_ultralisk.png")
-
-
-# ---------------------------------------------------------------------------
-# effects
-# ---------------------------------------------------------------------------
-def bullet(name, w, h, col, core=WHITE):
-    img = canvas(w, h)
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((0, 0, S(w), S(h)), radius=S(w / 2), fill=col)
-    d.rounded_rectangle((S(w * 0.25), S(h * 0.1), S(w * 0.75), S(h * 0.9)), radius=S(w * 0.2), fill=core)
-    img = glow(img, S(2), col, 0.8)
-    finish(img, w, h, name)
-
-
-def muzzle_flash():
-    img = canvas(48, 48)
-    d = ImageDraw.Draw(img)
-    c = S(24)
-    # bursts
-    for k in range(8):
-        a = k / 8 * math.tau
-        r0 = S(3)
-        r1 = S(13 + (k % 2) * 6)
-        d.polygon(
-            [
-                (c + math.cos(a - 0.22) * r0, c + math.sin(a - 0.22) * r0),
-                (c + math.cos(a) * r1, c + math.sin(a) * r1),
-                (c + math.cos(a + 0.22) * r0, c + math.sin(a + 0.22) * r0),
-            ],
-            fill=AMBER + (220,),
-        )
-    d.ellipse((c - S(8), c - S(8), c + S(8), c + S(8)), fill=(255, 238, 180, 255))
-    d.ellipse((c - S(4), c - S(4), c + S(4), c + S(4)), fill=WHITE)
-    img = glow(img, S(3), AMBER, 0.9)
-    finish(img, 48, 48, "muzzle_flash.png")
-
-
-def tracer():
-    img = canvas(64, 8)
-    d = ImageDraw.Draw(img)
-    for y in range(S(8)):
-        t = 1.0 - abs(y / S(8) - 0.5) * 2.0
-        a = int(80 + t * 175)
-        d.line([(0, y), (S(64), y)], fill=CYAN + (a,))
-    d.line([(0, S(4)), (S(64), S(4))], fill=CYAN_L, width=S(1.2))
-    finish(img, 64, 8, "tracer.png")
+def shadow(name, w=40, h=24, peak=150):
+    im = new(w, h)
+    px = im.load()
+    for y in range(h):
+        for x in range(w):
+            dx = (x + 0.5 - w / 2) / (w / 2)
+            dy = (y + 0.5 - h / 2) / (h / 2)
+            dist = math.hypot(dx, dy)
+            if dist > 1.0:
+                continue
+            band = int((1.0 - dist) * peak) // 32 * 32
+            if band > 0:
+                px[x, y] = (8, 8, 16, min(255, band))
+    return save(im, name)
 
 
 def explosion_frames():
-    for f in range(6):
-        img = canvas(96, 96)
-        d = ImageDraw.Draw(img)
-        c = S(48)
-        t = f / 5
-        # smoke
-        for k in range(9):
-            a = random.uniform(0, math.tau)
-            dist = random.uniform(0, 18 + f * 5)
-            rr = random.uniform(12, 26) + f * 2
-            x = c + math.cos(a) * S(dist)
-            y = c + math.sin(a) * S(dist)
-            col = mix((70, 64, 58, 200), (28, 27, 26, 120), t)
-            d.ellipse((x - S(rr), y - S(rr), x + S(rr), y + S(rr)), fill=col)
-        # fireball
-        radius = (30 - f * 3.4) * (1.0 + f * 0.15)
-        if f < 3:
-            d.ellipse(
-                (c - S(radius), c - S(radius), c + S(radius), c + S(radius)),
-                fill=(255, 196, 74, 230 - f * 40),
-            )
-            d.ellipse(
-                (c - S(radius * 0.65), c - S(radius * 0.65), c + S(radius * 0.65), c + S(radius * 0.65)),
-                fill=(255, 240, 190, 240),
-            )
-        # sparks
-        for k in range(14):
-            a = random.uniform(0, math.tau)
-            dist = random.uniform(6, 20 + f * 7)
-            x = c + math.cos(a) * S(dist)
-            y = c + math.sin(a) * S(dist)
-            d.ellipse((x - S(1.2), y - S(1.2), x + S(1.2), y + S(1.2)), fill=AMBER + (200,))
-        img = glow(img, S(4), (255, 150, 45, 255), 0.6)
-        draw_noise(img, 8, 60 + f)
-        finish(img, 96, 96, f"explosion_{f + 1}.png")
-
-
-def smoke():
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    c = S(32)
-    for k in range(12):
-        a = random.uniform(0, math.tau)
-        dist = random.uniform(0, 14)
-        rr = random.uniform(8, 18)
-        x = c + math.cos(a) * S(dist)
-        y = c + math.sin(a) * S(dist)
-        d.ellipse((x - S(rr), y - S(rr), x + S(rr), y + S(rr)), fill=(56, 56, 58, 120))
-    img = img.filter(ImageFilter.GaussianBlur(S(2)))
-    finish(img, 64, 64, "smoke.png")
-
-
-def spark():
-    img = canvas(8, 8)
-    d = ImageDraw.Draw(img)
-    d.ellipse((0, 0, S(8), S(8)), fill=AMBER + (255,))
-    d.ellipse((S(2), S(2), S(6), S(6)), fill=WHITE)
-    img = glow(img, S(2), AMBER, 0.8)
-    finish(img, 8, 8, "spark.png")
-
-
-def ring(name, col):
-    img = canvas(128, 128)
-    d = ImageDraw.Draw(img)
-    c = S(64)
-    d.ellipse((c - S(50), c - S(50), c + S(50), c + S(50)), outline=col + (230,), width=S(3.0))
-    d.ellipse((c - S(42), c - S(42), c + S(42), c + S(42)), outline=col + (100,), width=S(1.2))
-    for k in range(4):
-        a = k / 4 * math.tau
-        x = c + math.cos(a) * S(50)
-        y = c + math.sin(a) * S(50)
-        glow_dot(d, (x, y), 2.4, col + (255,), core=WHITE)
-    img = glow(img, S(4), col, 0.8)
-    finish(img, 128, 128, name)
-
-
-def beam():
-    img = canvas(16, 128)
-    d = ImageDraw.Draw(img)
-    for x in range(S(16)):
-        t = 1.0 - abs(x / S(16) - 0.5) * 2.0
-        a = int(60 + 195 * t)
-        d.line([(x, 0), (x, S(128))], fill=CYAN + (a,))
-    d.line([(S(8), 0), (S(8), S(128))], fill=WHITE + (240,), width=S(1.0))
-    img = glow(img, S(3), CYAN, 0.9)
-    finish(img, 16, 128, "beam.png")
-
-
-def shadow():
-    img = canvas(96, 96)
-    d = ImageDraw.Draw(img)
-    d.ellipse((S(6), S(18), S(90), S(78)), fill=(0, 0, 0, 150))
-    img = img.filter(ImageFilter.GaussianBlur(S(4)))
-    finish(img, 96, 96, "shadow.png")
-
-
-def decal_scorch():
-    img = canvas(128, 128)
-    d = ImageDraw.Draw(img)
-    c = S(64)
-    for k in range(20):
-        a = random.uniform(0, math.tau)
-        dist = random.uniform(0, 20)
-        rr = random.uniform(12, 34)
-        x = c + math.cos(a) * S(dist)
-        y = c + math.sin(a) * S(dist)
-        d.ellipse((x - S(rr), y - S(rr), x + S(rr), y + S(rr)), fill=(10, 10, 10, random.randint(30, 80)))
-    for k in range(10):
-        a = random.uniform(0, math.tau)
-        dist = random.uniform(20, 50)
-        x = c + math.cos(a) * S(dist)
-        y = c + math.sin(a) * S(dist)
-        d.ellipse((x - S(2), y - S(2), x + S(2), y + S(2)), fill=(20, 18, 16, 100))
-    img = img.filter(ImageFilter.GaussianBlur(S(2)))
-    finish(img, 128, 128, "decal_scorch.png")
-
-
-def decal_creep():
-    img = canvas(160, 160)
-    d = ImageDraw.Draw(img)
-    c = S(80)
-    for k in range(24):
-        a = random.uniform(0, math.tau)
-        dist = random.uniform(0, 28)
-        rr = random.uniform(20, 48)
-        x = c + math.cos(a) * S(dist)
-        y = c + math.sin(a) * S(dist)
-        d.ellipse((x - S(rr), y - S(rr), x + S(rr), y + S(rr)), fill=PURPLE_1 + (random.randint(40, 90),))
-    for k in range(14):
-        a = random.uniform(0, math.tau)
-        x0 = c + math.cos(a) * S(15)
-        y0 = c + math.sin(a) * S(15)
-        x1 = c + math.cos(a + 0.4) * S(random.uniform(45, 75))
-        y1 = c + math.sin(a + 0.4) * S(random.uniform(45, 75))
-        d.line([(x0, y0), ((x0 + x1) / 2 + random.uniform(-10, 10) * SS, (y0 + y1) / 2), (x1, y1)], fill=PURPLE_4 + (120,), width=S(1.2), joint="curve")
-    img = img.filter(ImageFilter.GaussianBlur(S(2)))
-    finish(img, 160, 160, "decal_creep.png")
-
-
-# ---------------------------------------------------------------------------
-# props
-# ---------------------------------------------------------------------------
-def crate(name, metal=True):
-    img = canvas(56, 56)
-    d = ImageDraw.Draw(img)
-    base = STEEL_2 if metal else RUST_2
-    bevel_rect(d, (S(5), S(6), S(51), S(51)), base, radius=S(3), width=S(1.2))
-    d.rectangle((S(10), S(11), S(46), S(46)), outline=STEEL_0, width=S(1.0))
-    d.line([(S(10), S(11)), (S(46), S(46))], fill=STEEL_0, width=S(1.6))
-    d.line([(S(46), S(11)), (S(10), S(46))], fill=STEEL_0, width=S(1.6))
-    if metal:
-        d.rectangle((S(20), S(20), S(36), S(36)), fill=STEEL_1, outline=STEEL_4, width=S(0.8))
-        glow_dot(d, (S(28), S(28)), 2.0, AMBER + (220,))
-    else:
-        for _ in range(10):
-            x = random.uniform(10, 46)
-            d.line([(S(x), S(12)), (S(x + random.uniform(-3, 3)), S(44))], fill=RUST_1 + (100,), width=S(0.8))
-    draw_noise(img, 9, 70)
-    finish(img, 56, 56, name)
-
-
-def barrel(name, col):
-    img = canvas(40, 40)
-    d = ImageDraw.Draw(img)
-    c = S(20)
-    d.ellipse((c - S(17), c - S(17), c + S(17), c + S(17)), fill=(0, 0, 0, 80))
-    d.ellipse((c - S(15), c - S(15), c + S(15), c + S(15)), fill=STEEL_1, outline=STEEL_0, width=S(1.0))
-    d.ellipse((c - S(12), c - S(12), c + S(12), c + S(12)), fill=col, outline=mix(col, WHITE, 0.25), width=S(0.8))
-    d.ellipse((c - S(7), c - S(7), c + S(7), c + S(7)), fill=STEEL_0, outline=STEEL_4, width=S(0.8))
-    d.ellipse((c - S(3), c - S(3), c + S(3), c + S(3)), fill=STEEL_3)
-    d.arc((c - S(15), c - S(15), c + S(15), c + S(15)), 200, 340, fill=mix(col, WHITE, 0.4), width=S(1.0))
-    draw_noise(img, 7, 71)
-    finish(img, 40, 40, name)
-
-
-def pipe():
-    img = canvas(128, 48)
-    d = ImageDraw.Draw(img)
-    for y in (S(10), S(28)):
-        d.rounded_rectangle((0, y, S(128), y + S(10)), radius=S(4), fill=STEEL_1, outline=STEEL_0, width=S(0.7))
-        d.line([(0, y + S(2)), (S(128), y + S(2))], fill=STEEL_4, width=S(0.8))
-        for x in range(0, 128, 32):
-            d.rectangle((S(x + 2), y - S(1), S(x + 6), y + S(11)), fill=STEEL_3, outline=STEEL_0, width=S(0.4))
-    draw_noise(img, 8, 72)
-    finish(img, 128, 48, "pipe.png")
-
-
-def sandbag():
-    img = canvas(72, 32)
-    d = ImageDraw.Draw(img)
+    names = []
     for i in range(4):
-        x = S(4 + i * 17)
-        d.rounded_rectangle((x, S(6), x + S(20), S(26)), radius=S(6), fill=(96, 84, 58, 255), outline=(42, 38, 28, 255), width=S(0.8))
-        d.arc((x, S(6), x + S(20), S(26)), 200, 340, fill=(150, 132, 92, 255), width=S(1.0))
-    draw_noise(img, 8, 73)
-    finish(img, 72, 32, "sandbag.png")
+        im = new(48, 48)
+        d = ImageDraw.Draw(im)
+        c = 24
+        t = i / 3
+        if i < 3:
+            r = 14 + i * 5
+            jagged(d, c, c, r, (255, 214, 120), 40 + i, points=13, jitter=0.5)
+            jagged(d, c, c, int(r * 0.7), (255, 244, 206) if i == 0
+                   else (240, 150, 60), 50 + i, points=11, jitter=0.55)
+            if i > 0:
+                jagged(d, c, c, int(r * 0.45), (150, 70, 44), 60 + i,
+                       points=10, jitter=0.6)
+        else:
+            for k in range(7):
+                a = k / 7 * math.tau
+                blob(d, int(c + math.cos(a) * 12), int(c + math.sin(a) * 11),
+                     7, 6, (72, 66, 64), 70 + k, alpha=230, steps=9)
+            blob(d, c, c, 9, 8, (52, 48, 48), 77, alpha=240, steps=9)
+        names.append(save(im, f"explosion_{i + 1}.png"))
+    return names
 
 
-def rock():
-    img = canvas(96, 96)
-    d = ImageDraw.Draw(img)
-    c = S(48)
-    d.ellipse((S(8), S(50), S(88), S(84)), fill=(0, 0, 0, 100))
-    pts = []
-    for k in range(9):
-        a = k / 9 * math.tau
-        r = S(30) * (0.7 + random.random() * 0.4)
-        pts.append((c + math.cos(a) * r * 1.05, c + math.sin(a) * r * 0.8))
-    polygon(d, pts, (62, 58, 52, 255), outline=(24, 24, 24, 255), width=S(1.0))
-    for _ in range(6):
-        x = random.uniform(20, 76)
-        y = random.uniform(30, 70)
-        d.line([(S(x), S(y)), (S(x + random.uniform(-16, 16)), S(y + random.uniform(-10, 10)))], fill=(110, 102, 88, 130), width=S(0.8))
-    draw_noise(img, 12, 74)
-    finish(img, 96, 96, "rock.png")
+def crosshair(name):
+    im = new(13, 13)
+    d = ImageDraw.Draw(im)
+    c = 6
+    col = (238, 244, 236)
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        for step in (4, 5, 6):
+            d.point((c + dx * step, c + dy * step), fill=rgba(col))
+    d.point((c, c), fill=rgba(col))
+    d.point((c + 1, c), fill=rgba((120, 130, 124)))
+    return save(im, name)
+
+
+def hit_marker(name):
+    im = new(11, 11)
+    d = ImageDraw.Draw(im)
+    for s in (-1, 1):
+        for k in range(3, 6):
+            d.point((5 + s * k, 5 + s * k), fill=rgba((255, 92, 74)))
+            d.point((5 + s * k, 5 - s * k), fill=rgba((255, 92, 74)))
+    return save(im, name)
 
 
 # ---------------------------------------------------------------------------
-# UI
+# lighting + vignette
 # ---------------------------------------------------------------------------
-def panel():
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    bevel_rect(d, (0, 0, S(64), S(64)), (17, 23, 30, 245), radius=S(2), width=S(1.0))
-    d.rectangle((S(3), S(3), S(61), S(61)), outline=(54, 68, 80, 255), width=S(0.7))
-    d.line([(S(4), S(4)), (S(60), S(4))], fill=GOLD + (130,), width=S(0.7))
-    for x in (S(7), S(57)):
-        for y in (S(7), S(57)):
-            glow_dot(d, (x, y), 1.0, STEEL_4)
-    finish(img, 64, 64, "ui_panel.png")
+def vignette(name):
+    im = new(160, 90)
+    px = im.load()
+    for y in range(90):
+        for x in range(160):
+            dx = abs(x - 80) / 80.0
+            dy = abs(y - 45) / 45.0
+            edge = max(dx, dy)
+            t = max(0.0, edge - 0.55) / 0.45
+            band = int(t * t * 190) // 32 * 32
+            if band > 0:
+                px[x, y] = (4, 5, 12, min(255, band))
+    return save(im, name)
 
 
-def button(name, fill, border):
-    img = canvas(64, 64)
-    d = ImageDraw.Draw(img)
-    bevel_rect(d, (S(1), S(1), S(63), S(63)), fill, radius=S(3), width=S(1.2))
-    d.rectangle((S(5), S(5), S(59), S(59)), outline=border, width=S(0.8))
-    d.line([(S(6), S(6)), (S(58), S(6))], fill=mix(fill, WHITE, 0.4), width=S(0.6))
-    for x in (S(8), S(56)):
-        for y in (S(8), S(56)):
-            glow_dot(d, (x, y), 0.9, border)
-    finish(img, 64, 64, name)
+# ---------------------------------------------------------------------------
+# hud
+# ---------------------------------------------------------------------------
+def ui_panel(name):
+    im = new(16, 16)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 15, 15), fill=rgba((14, 20, 26, 236)))
+    d.rectangle((0, 0, 15, 15), outline=rgba((168, 132, 64, 255)))
+    d.rectangle((2, 2, 13, 13), outline=rgba((74, 62, 42, 255)))
+    for x, y in ((1, 1), (14, 1), (1, 14), (14, 14)):
+        d.point((x, y), fill=rgba((226, 190, 110, 255)))
+    return save(im, name)
 
 
-def icon_mineral():
-    img = canvas(32, 32)
-    d = ImageDraw.Draw(img)
-    pts = [(S(16), S(3)), (S(28), S(11)), (S(25), S(27)), (S(7), S(27)), (S(4), S(11))]
-    polygon(d, pts, (88, 160, 220, 255), outline=(20, 50, 80, 255), width=S(0.8))
-    d.polygon([(S(16), S(3)), (S(28), S(11)), (S(16), S(16)), (S(4), S(11))], fill=(150, 220, 255, 255))
-    d.line([(S(16), S(3)), (S(16), S(27))], fill=(40, 90, 130, 255), width=S(0.8))
-    img = glow(img, S(2), CYAN, 0.5)
-    finish(img, 32, 32, "icon_mineral.png")
+def ui_slot(name, fill=(22, 30, 36, 230), border=(96, 104, 100, 255)):
+    im = new(14, 14)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 13, 13), fill=fill)
+    d.rectangle((0, 0, 13, 13), outline=border)
+    d.line([(2, 2), (11, 2)], fill=rgba(mix(border[:3], WHITE, 0.3)))
+    return save(im, name)
 
 
-def icon_gas():
-    img = canvas(32, 32)
-    d = ImageDraw.Draw(img)
-    d.rectangle((S(9), S(15), S(23), S(29)), fill=STEEL_1, outline=STEEL_4, width=S(0.7))
-    d.ellipse((S(11), S(3), S(21), S(17)), fill=(80, 200, 100, 220), outline=(30, 110, 50, 255), width=S(0.6))
-    d.ellipse((S(14), S(6), S(18), S(12)), fill=(180, 255, 180, 230))
-    img = glow(img, S(2), GREEN, 0.6)
-    finish(img, 32, 32, "icon_gas.png")
+def icon(name, kind):
+    im = new(12, 12)
+    d = ImageDraw.Draw(im)
+    if kind == "health":
+        d.rectangle((4, 2, 7, 9), fill=rgba(RED))
+        d.rectangle((2, 4, 9, 7), fill=rgba(RED))
+        d.point((4, 3), fill=rgba((222, 110, 92)))
+        d.point((3, 5), fill=rgba((222, 110, 92)))
+    elif kind == "stamina":
+        d.polygon([(7, 1), (3, 6), (5, 6), (4, 11), (9, 5), (6, 5)],
+                  fill=rgba(YELLOW))
+        d.point((6, 3), fill=rgba((255, 234, 160)))
+    elif kind == "ammo":
+        d.rectangle((4, 3, 7, 9), fill=rgba((226, 208, 152)))
+        d.rectangle((4, 8, 7, 10), fill=rgba((176, 158, 112)))
+        d.polygon([(4, 3), (7, 3), (5, 1)], fill=rgba((196, 176, 128)))
+        d.point((5, 4), fill=rgba((250, 240, 200)))
+    elif kind == "reload":
+        d.arc((2, 2, 9, 9), 40, 320, fill=rgba(TEAL_L), width=2)
+        d.polygon([(7, 1), (11, 4), (6, 5)], fill=rgba(TEAL_L))
+    return save(im, name)
 
 
-def icon_tower(name, kind):
-    img = canvas(40, 40)
-    d = ImageDraw.Draw(img)
-    c = S(20)
-    if kind == "gauss":
-        d.ellipse((c - S(15), c - S(15), c + S(15), c + S(15)), fill=STEEL_1, outline=STEEL_4, width=S(0.8))
-        for ox in (-5, 5):
-            d.rectangle((c + S(ox - 2), c - S(14), c + S(ox + 2), c + S(2)), fill=STEEL_4)
-        glow_dot(d, (c, c + S(3)), 2.2, CYAN)
-    elif kind == "missile":
-        d.ellipse((c - S(15), c - S(15), c + S(15), c + S(15)), fill=STEEL_1, outline=STEEL_4, width=S(0.8))
-        for i in range(2):
-            for j in range(2):
-                x = c - S(9) + i * S(9)
-                y = c - S(11) + j * S(9)
-                d.rectangle((x, y, x + S(7), y + S(7)), fill=STEEL_0, outline=AMBER, width=S(0.6))
-        glow_dot(d, (c, c), 2.0, AMBER)
-    else:
-        d.ellipse((c - S(15), c - S(15), c + S(15), c + S(15)), fill=STEEL_1, outline=STEEL_4, width=S(0.8))
-        for k in range(3):
-            a = k / 3 * math.tau
-            d.line([(c, c), (c + math.cos(a) * S(11), c + math.sin(a) * S(11))], fill=STEEL_4, width=S(2.0))
-        glow_dot(d, (c, c), 5.0, CYAN, core=CYAN_L)
-    finish(img, 40, 40, name)
+def portrait(name):
+    """Small survivor bust for menu / game-over."""
+    im = new(48, 48)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 47, 47), fill=rgba((30, 34, 38)))
+    d.rectangle((8, 34, 39, 47), fill=rgba(LEATHER_1))          # coat
+    d.rectangle((20, 30, 27, 38), fill=rgba(SKIN_2))            # neck
+    d.ellipse((14, 10, 33, 32), fill=rgba(SKIN_1))              # head
+    d.rectangle((17, 20, 30, 23), fill=rgba((44, 48, 52)))      # goggles band
+    d.rectangle((18, 21, 23, 23), fill=rgba(TEAL))
+    d.rectangle((25, 21, 30, 23), fill=rgba(TEAL))
+    d.pieslice((12, 5, 35, 26), 180, 360, fill=rgba((96, 74, 50)))  # hat crown
+    d.rectangle((6, 16, 41, 20), fill=rgba(LEATHER_2))          # brim
+    d.rectangle((14, 36, 33, 41), fill=rgba((128, 74, 52)))     # scarf
+    d.rectangle((0, 0, 47, 47), outline=rgba((168, 132, 64, 255)))
+    noise(im, 6, 3)
+    return save(im, name)
 
-
-def icon_relay():
-    img = canvas(40, 40)
-    d = ImageDraw.Draw(img)
-    c = S(20)
-    d.ellipse((c - S(15), c - S(15), c + S(15), c + S(15)), fill=STEEL_1, outline=STEEL_4, width=S(0.8))
-    d.polygon([(c - S(6), c + S(10)), (c - S(3), c - S(8)), (c + S(3), c - S(8)), (c + S(6), c + S(10))], fill=STEEL_3, outline=STEEL_0)
-    glow_dot(d, (c, c - S(8)), 4.0, CYAN, core=CYAN_L)
-    finish(img, 40, 40, "icon_relay.png")
-
-
-def icon_repair():
-    img = canvas(40, 40)
-    d = ImageDraw.Draw(img)
-    c = S(20)
-    d.ellipse((c - S(15), c - S(15), c + S(15), c + S(15)), fill=STEEL_1, outline=STEEL_4, width=S(0.8))
-    d.rectangle((c - S(3), c - S(11), c + S(3), c + S(11)), fill=GREEN)
-    d.rectangle((c - S(11), c - S(3), c + S(11), c + S(3)), fill=GREEN)
-    img = glow(img, S(2), GREEN, 0.5)
-    finish(img, 40, 40, "icon_repair.png")
-
-
-def portrait():
-    img = canvas(96, 96)
-    d = ImageDraw.Draw(img)
-    # background
-    for y in range(S(96)):
-        t = y / S(96)
-        d.line([(0, y), (S(96), y)], fill=mix((20, 40, 54, 255), (8, 12, 18, 255), t))
-    # frame
-    d.rectangle((S(4), S(4), S(92), S(92)), outline=GOLD + (220,), width=S(1.2))
-    d.rectangle((S(8), S(8), S(88), S(88)), outline=STEEL_4 + (160,), width=S(0.7))
-    c = S(48)
-    # goliath bust
-    d.ellipse((c - S(25), c - S(18), c + S(25), c + S(32)), fill=STEEL_1, outline=STEEL_0, width=S(1.0))
-    d.ellipse((c - S(19), c - S(13), c + S(19), c + S(24)), fill=STEEL_2)
-    d.rounded_rectangle((c - S(14), c - S(10), c + S(14), c + S(2)), radius=S(4), fill=(6, 12, 16, 255), outline=CYAN_D, width=S(0.8))
-    d.rounded_rectangle((c - S(11), c - S(8), c + S(11), c - S(2)), radius=S(2), fill=CYAN + (230,))
-    for ox in (-18, 18):
-        d.ellipse((c + S(ox) - S(9), c - S(6), c + S(ox) + S(9), c + S(18)), fill=STEEL_1, outline=STEEL_0, width=S(0.8))
-        d.ellipse((c + S(ox) - S(6), c - S(3), c + S(ox) + S(6), c + S(15)), fill=STEEL_3)
-    # scanner lines
-    for y in range(S(12), S(86), S(4)):
-        d.line([(S(10), y), (S(86), y)], fill=CYAN + (16,))
-    finish(img, 96, 96, "portrait_goliath.png")
-
-
-def minimap_bg():
-    img = canvas(192, 128)
-    d = ImageDraw.Draw(img)
-    d.rectangle((0, 0, S(192), S(128)), fill=(8, 14, 19, 235), outline=STEEL_3, width=S(1.0))
-    for x in range(0, 192, 16):
-        d.line([(S(x), 0), (S(x), S(128))], fill=(40, 80, 96, 50), width=S(0.4))
-    for y in range(0, 128, 16):
-        d.line([(0, S(y)), (S(192), S(y))], fill=(40, 80, 96, 50), width=S(0.4))
-    d.rectangle((S(2), S(2), S(190), S(126)), outline=CYAN_D + (150,), width=S(0.5))
-    finish(img, 192, 128, "ui_minimap.png")
+# ---------------------------------------------------------------------------
+# manifest + generation
+# ---------------------------------------------------------------------------
+def _v_variant(name_h):
+    """Rotate a horizontal road tile 90 degrees for vertical roads."""
+    name_v = name_h.replace("_h.png", "_v.png")
+    im = Image.open(OUT / name_h)
+    im.transpose(Image.ROTATE_90).save(OUT / name_v)
+    return name_v
 
 
 def main():
-    random.seed(2126)
-    terrain_metal("tile_metal_1.png", 1, rust=0.1)
-    terrain_metal("tile_metal_2.png", 2, rust=0.25)
-    terrain_metal("tile_metal_3.png", 3, rust=0.18, hazard=True)
-    terrain_grate()
-    terrain_metal("tile_rust_1.png", 4, rust=0.7, base=RUST_1)
-    terrain_rock("tile_rock_1.png", 5)
-    terrain_rock("tile_rock_2.png", 6)
-    terrain_creep("tile_creep_1.png", 8)
-    terrain_creep("tile_creep_2.png", 9)
-    base_pad()
+    names = []
 
-    command_center()
-    tower_base("tower_gauss_base.png", CYAN)
-    gauss_head()
-    tower_base("tower_missile_base.png", AMBER)
-    missile_head()
-    tower_base("tower_arc_base.png", CYAN)
-    arc_head()
-    relay()
+    # terrain ------------------------------------------------------------
+    for i in (1, 2, 3):
+        names.append(tile_sand(f"tile_sand_{i}.png", 10 + i,
+                               (SAND_1, SAND_2, SAND_3)[i - 1]))
+    for i in (1, 2, 3):
+        names.append(tile_dirt(f"tile_dirt_{i}.png", 20 + i))
+    for i in (1, 2):
+        names.append(tile_gravel(f"tile_gravel_{i}.png", 30 + i))
+    for i in (1, 2):
+        names.append(tile_drygrass(f"tile_drygrass_{i}.png", 40 + i))
+    for i in (1, 2, 3):
+        names.append(tile_asphalt(f"tile_asphalt_{i}.png", 50 + i))
+    for i, mark in enumerate(("double_h", "dash_h", "edge_h", "cross_h"), 1):
+        h = tile_road(f"tile_road_{mark}.png", 60 + i, mark=mark)
+        names.append(h)
+        names.append(_v_variant(h))
+    for i in (1, 2):
+        names.append(tile_sidewalk(f"tile_sidewalk_{i}.png", 70 + i))
+    for i in (1, 2):
+        names.append(tile_checker(f"tile_checker_{i}.png", 80 + i))
+    for i in (1, 2):
+        names.append(tile_wood(f"tile_wood_{i}.png", 90 + i))
+    for i in (1, 2):
+        names.append(tile_concrete(f"tile_concrete_{i}.png", 100 + i))
 
-    goliath_legs(0)
-    goliath_legs(1)
-    goliath_torso()
-    zergling()
-    hydralisk()
-    ultralisk()
+    # walls --------------------------------------------------------------
+    for i in (1, 2):
+        names.append(wall_tile(f"wall_brick_{i}.png", "brick", 110 + i))
+    for i in (1, 2):
+        names.append(wall_tile(f"wall_brick_broken_{i}.png", "brick", 120 + i,
+                               broken=True))
+    for i in (1, 2):
+        names.append(wall_tile(f"wall_concrete_{i}.png", "concrete", 130 + i))
+    names.append(wall_tile("wall_concrete_broken.png", "concrete", 140,
+                           broken=True))
+    for i in (1, 2):
+        names.append(wall_tile(f"wall_metal_{i}.png", "metal", 150 + i))
 
-    bullet("bullet_gauss.png", 8, 24, CYAN)
-    bullet("bullet_missile.png", 14, 30, AMBER, core=(255, 240, 200, 255))
-    muzzle_flash()
-    tracer()
-    explosion_frames()
-    smoke()
-    spark()
-    ring("ring_cyan.png", CYAN)
-    ring("selection_ring.png", GREEN)
-    beam()
-    shadow()
-    decal_scorch()
-    decal_creep()
+    # decals -------------------------------------------------------------
+    for i in (1, 2):
+        names.append(decal_leaf(f"decal_leaf_{i}.png", 160 + i))
+    for i in (1, 2):
+        names.append(decal_grass(f"decal_grass_{i}.png", 170 + i))
+    names.append(decal_oil("decal_oil.png", 180))
+    for i in (1, 2):
+        names.append(decal_blood(f"decal_blood_{i}.png", 190 + i))
+    for i in (1, 2):
+        names.append(decal_rubble(f"decal_rubble_{i}.png", 200 + i))
+    for i in (1, 2):
+        names.append(decal_crack(f"decal_crack_{i}.png", 210 + i))
+    for i in (1, 2):
+        names.append(decal_tire(f"decal_tire_{i}.png", 220 + i))
+    names.append(decal_scorch("decal_scorch.png", 230))
 
-    crate("crate_metal.png", True)
-    crate("crate_wood.png", False)
-    barrel("barrel_green.png", (70, 120, 70, 255))
-    barrel("barrel_red.png", (150, 52, 44, 255))
-    pipe()
-    sandbag()
-    rock()
+    # props --------------------------------------------------------------
+    names.append(car_wreck("car_wreck_1.png", 301, RUST_2))
+    names.append(car_wreck("car_wreck_2.png", 302, (96, 110, 124), flip=True))
+    names.append(car_wreck("car_wreck_3.png", 303, (140, 118, 78)))
+    names.append(rv_wreck("rv_wreck.png", 310))
+    names.append(dumpster("dumpster_1.png", 320, (78, 104, 76)))
+    names.append(dumpster("dumpster_2.png", 321, (112, 88, 64)))
+    names.append(sofa("sofa.png", 330))
+    names.append(table("table.png", 331))
+    names.append(chair("chair.png", 332))
+    names.append(shelf("shelf.png", 333))
+    names.append(counter("counter.png", 334))
+    names.append(pole("pole.png", 340))
+    names.append(wire("wire.png"))
+    names.append(street_lamp("street_lamp.png", 341))
+    names.append(traffic_light("traffic_light.png", 342))
+    names.append(road_sign("road_sign.png", 343))
+    names.append(gas_pump("gas_pump.png", 344))
+    names.append(dead_tree("dead_tree_1.png", 350))
+    names.append(dead_tree("dead_tree_2.png", 351))
+    for i in (1, 2):
+        names.append(yucca(f"yucca_{i}.png", 360 + i))
+    names.append(yucca("palm.png", 370, palm=True))
+    for i in (1, 2):
+        names.append(shrub(f"shrub_{i}.png", 380 + i))
+    names.append(rock("rock_1.png", 390, (26, 22)))
+    names.append(rock("rock_2.png", 391, (20, 17)))
+    names.append(rock("rock_3.png", 392, (15, 13)))
+    names.append(barrel("barrel_rust.png", 400, RUST_2, YELLOW))
+    names.append(barrel("barrel_blue.png", 401, (72, 94, 124),
+                        (222, 222, 210)))
+    names.append(crate("crate_metal.png", 410, wood=False))
+    names.append(crate("crate_wood.png", 411, wood=True))
+    for i in (1, 2):
+        names.append(tire_pile(f"tire_pile_{i}.png", 420 + i))
+    for i in (1, 2):
+        names.append(debris_pile(f"debris_pile_{i}.png", 430 + i))
+    names.append(barrier("barrier.png", 440))
+    names.append(sandbags("sandbags.png", 441))
 
-    panel()
-    button("ui_button.png", (27, 38, 47, 245), (74, 94, 108, 255))
-    button("ui_button_hover.png", (43, 70, 78, 250), GOLD + (255,))
-    icon_mineral()
-    icon_gas()
-    icon_tower("icon_gauss.png", "gauss")
-    icon_tower("icon_missile.png", "missile")
-    icon_tower("icon_arc.png", "arc")
-    icon_relay()
-    icon_repair()
-    portrait()
-    minimap_bg()
+    # characters ---------------------------------------------------------
+    names += character_frames("player_body", draw_survivor)
+    names.append(gun_overlay("player_gun.png", LEATHER_1))
+    names += character_frames("raider_body", draw_raider)
+    names.append(gun_overlay("raider_gun.png", (86, 92, 96),
+                             metal=(52, 52, 56), stock=(76, 62, 44)))
+    names += character_frames("infected_body", draw_infected)
 
-    print("generated assets in", OUT)
+    # fx -----------------------------------------------------------------
+    names.append(bullet("bullet.png"))
+    names.append(tracer("tracer.png"))
+    names.append(muzzle_flash("muzzle_flash.png"))
+    names.append(casing("casing.png"))
+    names.append(soft_puff("dust_puff.png", 16, (198, 182, 150), peak=160))
+    names.append(soft_puff("smoke.png", 32, (116, 114, 112), peak=176,
+                           power=2.0))
+    names.append(spark("spark.png"))
+    names.append(shadow("shadow.png", 40, 24))
+    names.append(shadow("shadow_small.png", 24, 16, peak=140))
+    names.append(decal_blood("blood_splat.png", 450))
+    names += explosion_frames()
+    names.append(crosshair("crosshair.png"))
+    names.append(hit_marker("hit_marker.png"))
+
+    # lighting -----------------------------------------------------------
+    names.append(banded_glow("glow_warm.png", 64, (255, 196, 118), 176,
+                             power=2.0))
+    names.append(banded_glow("glow_cool.png", 64, (176, 200, 232), 128,
+                             power=2.2))
+    names.append(banded_glow("glow_fire.png", 48, (255, 150, 60), 208,
+                             power=1.8))
+    names.append(vignette("vignette.png"))
+
+    # hud ----------------------------------------------------------------
+    names.append(ui_panel("ui_panel.png"))
+    names.append(ui_slot("ui_slot.png"))
+    names.append(ui_slot("ui_slot_hover.png", (34, 46, 52, 240),
+                         (168, 176, 160, 255)))
+    names.append(icon("icon_health.png", "health"))
+    names.append(icon("icon_stamina.png", "stamina"))
+    names.append(icon("icon_ammo.png", "ammo"))
+    names.append(icon("icon_reload.png", "reload"))
+    names.append(portrait("portrait.png"))
+
+    # prune sprites from older passes ------------------------------------
+    keep = set(names)
+    for path in sorted(OUT.glob("*.png")):
+        if path.name not in keep:
+            path.unlink()
+
+    print(f"generated {len(names)} sprites into {OUT}")
 
 
 if __name__ == "__main__":

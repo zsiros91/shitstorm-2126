@@ -1,21 +1,16 @@
 mod arena;
 mod assets;
-mod build;
 mod camera;
 mod collision;
 mod combat;
 mod debug;
-mod economy;
 mod enemy;
 mod fx;
 mod healthbar;
-mod hq;
 mod player;
-mod power;
 mod states;
-mod tower;
 mod ui;
-mod waves;
+mod weapon;
 
 use bevy::prelude::*;
 
@@ -81,18 +76,13 @@ fn main() {
             fx::FxPlugin,
             camera::CameraPlugin,
             arena::ArenaPlugin,
-            hq::HqPlugin,
-            power::PowerPlugin,
             healthbar::HealthBarPlugin,
-            economy::EconomyPlugin,
         ))
         .add_plugins((
             player::PlayerPlugin,
+            weapon::WeaponPlugin,
             enemy::EnemyPlugin,
-            tower::TowerPlugin,
-            build::BuildPlugin,
             combat::CombatPlugin,
-            waves::WavesPlugin,
             ui::UiPlugin,
             debug::DebugPlugin,
         ))
