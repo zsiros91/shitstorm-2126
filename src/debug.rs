@@ -106,8 +106,12 @@ fn debug_keys(
     }
 
     if keys.just_pressed(KeyCode::F12) {
-        let path = std::env::var("SHITSTORM_SCREENSHOT")
-            .unwrap_or_else(|_| "/tmp/opencode/bevy_shot.png".to_string());
+        let path = std::env::var("SHITSTORM_SCREENSHOT").unwrap_or_else(|_| {
+            std::env::temp_dir()
+                .join("shitstorm_shot.png")
+                .to_string_lossy()
+                .into_owned()
+        });
         info!("saving screenshot to {path}");
         commands
             .spawn(Screenshot::primary_window())

@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod arena;
 mod assets;
 mod camera;
@@ -13,22 +15,31 @@ mod ui;
 mod weapon;
 
 use bevy::prelude::*;
+use bevy::window::WindowResolution;
 
 use crate::states::{GameSet, GameState, Paused};
 
 /// Resolve the asset directory. A plain `cargo run` puts the binary in `target/debug`,
 /// which makes Bevy look for `target/debug/assets`. Prefer the project assets directory
-/// that was baked in at compile time, and fall back to a co-located `assets` folder.
+/// that was baked in at compile time (development), then an `assets` folder next to the
+/// executable (packaged builds, any platform), and finally a relative `assets` folder.
 fn asset_path() -> String {
     if let Ok(root) = std::env::var("BEVY_ASSET_ROOT") {
         return format!("{root}/assets");
     }
     let manifest_assets = format!("{}/assets", env!("CARGO_MANIFEST_DIR"));
     if std::path::Path::new(&manifest_assets).is_dir() {
-        manifest_assets
-    } else {
-        "assets".to_string()
+        return manifest_assets;
     }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let beside_exe = dir.join("assets");
+            if beside_exe.is_dir() {
+                return beside_exe.to_string_lossy().into_owned();
+            }
+        }
+    }
+    "assets".to_string()
 }
 
 fn main() {
@@ -51,7 +62,11 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "SHITSTORM 2126".into(),
-                        resolution: (1280, 720).into(),
+                        // Lock the window to 1:1 pixels so OS display scaling
+                        // (125%/150% on Windows, fractional scaling on Linux)
+                        // can never blur the pixel art.
+                        resolution: WindowResolution::new(1280, 720)
+                            .with_scale_factor_override(1.0),
                         ..default()
                     }),
                     ..default()
