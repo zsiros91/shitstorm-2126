@@ -9,11 +9,13 @@ mod debug;
 mod enemy;
 mod fx;
 mod healthbar;
+mod logfile;
 mod player;
 mod states;
 mod ui;
 mod weapon;
 
+use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::window::WindowResolution;
 
@@ -43,12 +45,9 @@ fn asset_path() -> String {
 }
 
 fn main() {
-    #[cfg(target_os = "windows")]
-    if std::env::var_os("WGPU_BACKEND").is_none() {
-        unsafe {
-            std::env::set_var("WGPU_BACKEND", "dx12");
-        }
-    }
+    // Release builds on Windows have no console, so make sure diagnostics land
+    // in a file. See `logfile::log_path` for the location.
+    logfile::install_panic_hook();
 
     App::new()
         .insert_resource(ClearColor(Color::srgb(0.012, 0.02, 0.03)))
@@ -62,13 +61,13 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "SHITSTORM 2126".into(),
-                        // Lock the window to 1:1 pixels so OS display scaling
-                        // (125%/150% on Windows, fractional scaling on Linux)
-                        // can never blur the pixel art.
-                        resolution: WindowResolution::new(1280, 720)
-                            .with_scale_factor_override(1.0),
+                        resolution: WindowResolution::new(1280, 720),
                         ..default()
                     }),
+                    ..default()
+                })
+                .set(LogPlugin {
+                    custom_layer: logfile::file_layer,
                     ..default()
                 }),
         )

@@ -48,8 +48,16 @@ The last command writes `dist/shitstorm-2126-windows-x86_64.zip`, which contains
 the executable and `assets/`. Unpack it anywhere and run
 `shitstorm-2126.exe`; release builds are windowed (no console).
 
-The game defaults to the DX12 backend on Windows. Override it with
-`WGPU_BACKEND=vulkan` (or another wgpu backend) if needed.
+The game lets wgpu pick the backend (DX12 is preferred on Windows, with
+automatic fallback). Force one with `WGPU_BACKEND=vulkan`, `WGPU_BACKEND=dx12`
+or `WGPU_BACKEND=gl` if a driver misbehaves.
+
+## Troubleshooting
+
+Release builds are windowed, so there is no console to read. Every run writes a
+log to `%TEMP%\shitstorm-2126.log` (`$TMPDIR/shitstorm-2126.log` on Linux),
+including the selected GPU adapter, asset errors and panic messages. Attach that
+file when reporting a problem.
 
 ## Development
 
