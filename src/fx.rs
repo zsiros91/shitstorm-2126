@@ -1,9 +1,16 @@
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{ClearColorConfig, RenderTarget};
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
 
 use crate::arena::{Z_BRIGHT, Z_DECAL};
 use crate::assets::GameAssets;
+use crate::camera::OffscreenRenderCamera;
 use crate::combat::EnemyKilled;
 use crate::states::{GameSet, GameState, gameplay_active};
+
+const TRACER_RENDER_SIZE: u32 = 64;
+const CASING_RENDER_SIZE: u32 = 8;
 
 #[derive(Resource, Default)]
 pub struct ScreenShake {
@@ -146,6 +153,7 @@ pub fn spawn_dust(commands: &mut Commands, assets: &GameAssets, position: Vec2) 
 
 pub fn spawn_tracer(
     commands: &mut Commands,
+    images: &mut Assets<Image>,
     assets: &GameAssets,
     start: Vec2,
     end: Vec2,
@@ -160,22 +168,126 @@ pub fn spawn_tracer(
     }
     let angle = delta.y.atan2(delta.x);
     let mid = (start + end) * 0.5;
-
-    commands.spawn((
-        Sprite {
-            image: assets.tracer.clone(),
-            custom_size: Some(Vec2::new(length, width)),
-            color,
-            ..default()
-        },
-        Transform::from_xyz(mid.x, mid.y, Z_BRIGHT + 1.0)
-            .with_rotation(Quat::from_rotation_z(angle)),
-        FadeOut {
-            timer: life,
-            duration: life,
-        },
-        DespawnOnExit(GameState::Playing),
+    let target = images.add(Image::new_target_texture(
+        TRACER_RENDER_SIZE,
+        TRACER_RENDER_SIZE,
+        TextureFormat::Rgba8UnormSrgb,
+        None,
     ));
+
+    let tracer = commands
+        .spawn((
+            Sprite {
+                image: target.clone(),
+                custom_size: Some(Vec2::splat(TRACER_RENDER_SIZE as f32)),
+                color,
+                ..default()
+            },
+            Transform::from_xyz(mid.x, mid.y, Z_BRIGHT + 1.0),
+            FadeOut {
+                timer: life,
+                duration: life,
+            },
+            DespawnOnExit(GameState::Playing),
+        ))
+        .id();
+
+    let render_layer = RenderLayers::from_layers(&[tracer.index_u32() as usize + 2]);
+    commands.entity(tracer).with_children(|parent| {
+        parent.spawn((
+            Sprite {
+                image: assets.tracer.clone(),
+                custom_size: Some(Vec2::new(length, width)),
+                ..default()
+            },
+            Transform::from_xyz(0.0, 0.0, 0.1).with_rotation(Quat::from_rotation_z(angle)),
+            render_layer.clone(),
+        ));
+        parent.spawn((
+            Camera2d,
+            Camera {
+                order: -1,
+                clear_color: ClearColorConfig::Custom(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                ..default()
+            },
+            RenderTarget::Image(target.into()),
+            Projection::Orthographic(OrthographicProjection {
+                scale: 1.0,
+                ..OrthographicProjection::default_2d()
+            }),
+            Transform::from_xyz(0.0, 0.0, 100.0),
+            Msaa::Off,
+            render_layer,
+            OffscreenRenderCamera,
+        ));
+    });
+}
+
+pub fn spawn_casing(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    casing: Handle<Image>,
+    position: Vec2,
+    rotation: f32,
+    velocity: Vec2,
+    life: f32,
+) {
+    let target = images.add(Image::new_target_texture(
+        CASING_RENDER_SIZE,
+        CASING_RENDER_SIZE,
+        TextureFormat::Rgba8UnormSrgb,
+        None,
+    ));
+
+    let casing_entity = commands
+        .spawn((
+            Sprite {
+                image: target.clone(),
+                custom_size: Some(Vec2::splat(CASING_RENDER_SIZE as f32)),
+                ..default()
+            },
+            Transform::from_xyz(position.x, position.y, Z_BRIGHT),
+            Particle {
+                velocity,
+                drag: 4.0,
+            },
+            FadeOut {
+                timer: life,
+                duration: life,
+            },
+            DespawnOnExit(GameState::Playing),
+        ))
+        .id();
+
+    let render_layer = RenderLayers::from_layers(&[casing_entity.index_u32() as usize + 2]);
+    commands.entity(casing_entity).with_children(|parent| {
+        parent.spawn((
+            Sprite {
+                image: casing,
+                custom_size: Some(Vec2::new(5.0, 3.0)),
+                ..default()
+            },
+            Transform::from_xyz(0.0, 0.0, 0.1).with_rotation(Quat::from_rotation_z(rotation)),
+            render_layer.clone(),
+        ));
+        parent.spawn((
+            Camera2d,
+            Camera {
+                order: -1,
+                clear_color: ClearColorConfig::Custom(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                ..default()
+            },
+            RenderTarget::Image(target.into()),
+            Projection::Orthographic(OrthographicProjection {
+                scale: 1.0,
+                ..OrthographicProjection::default_2d()
+            }),
+            Transform::from_xyz(0.0, 0.0, 100.0),
+            Msaa::Off,
+            render_layer,
+            OffscreenRenderCamera,
+        ));
+    });
 }
 
 fn enemy_death_fx(

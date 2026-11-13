@@ -17,7 +17,9 @@ mod weapon;
 
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
-use bevy::window::WindowResolution;
+use bevy::render::RenderPlugin;
+use bevy::render::settings::{Backends, WgpuSettings};
+use bevy::window::{MonitorSelection, WindowMode, WindowResolution};
 
 use crate::states::{GameSet, GameState, Paused};
 
@@ -54,6 +56,14 @@ fn main() {
         .add_plugins(
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
+                .set(RenderPlugin {
+                    render_creation: WgpuSettings {
+                        backends: Some(Backends::DX12),
+                        ..default()
+                    }
+                    .into(),
+                    ..default()
+                })
                 .set(AssetPlugin {
                     file_path: asset_path(),
                     ..default()
@@ -62,6 +72,7 @@ fn main() {
                     primary_window: Some(Window {
                         title: "SHITSTORM 2126".into(),
                         resolution: WindowResolution::new(1280, 720),
+                        mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
                         ..default()
                     }),
                     ..default()

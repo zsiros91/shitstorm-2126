@@ -1,6 +1,6 @@
 # SHITSTORM 2126
 
-Top-down post-apocalyptic pixel-art shooter built with [Bevy](https://bevy.org) 0.20.
+Top-down post-apocalyptic pixel-art shooter built with [Bevy](https://bevy.org) 0.19.1.
 
 ## Running
 
@@ -19,9 +19,11 @@ executable. A packaged build therefore needs `assets/` beside the binary.
 | WASD / arrows | Move |
 | Shift | Sprint (drains stamina) |
 | Mouse | Aim |
+| Mouse wheel | Zoom in / out |
 | Left mouse | Fire |
 | R | Reload |
 | Esc | Pause |
+| Q | Quit (while paused) |
 
 ## Building for Windows
 
@@ -46,11 +48,9 @@ tools/package_windows.sh
 
 The last command writes `dist/shitstorm-2126-windows-x86_64.zip`, which contains
 the executable and `assets/`. Unpack it anywhere and run
-`shitstorm-2126.exe`; release builds are windowed (no console).
+`shitstorm-2126.exe`; release builds open borderless fullscreen (no console).
 
-The game lets wgpu pick the backend (DX12 is preferred on Windows, with
-automatic fallback). Force one with `WGPU_BACKEND=vulkan`, `WGPU_BACKEND=dx12`
-or `WGPU_BACKEND=gl` if a driver misbehaves.
+The renderer is configured to use DirectX 12 on Windows.
 
 ## Troubleshooting
 
@@ -62,8 +62,7 @@ file when reporting a problem.
 ## Development
 
 - `cargo test` runs the collision unit tests.
-- F1 toggles the collider overlay, F2 spawns a ring of hostiles, F12 saves a
-  screenshot.
+- F1 toggles the collider overlay; F12 saves a screenshot.
 - Environment flags used by the capture harness:
   `SHITSTORM_AUTOSTART`, `SHITSTORM_DEMO_INPUT`, `SHITSTORM_SCREENSHOT`,
   `SHITSTORM_SCREENSHOT_DELAY`.

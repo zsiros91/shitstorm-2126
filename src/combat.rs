@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::arena::{Arena, Z_BRIGHT};
-use crate::collision::{Collider, StaticCollider, segment_aabb_hit, segment_circle_hit};
+use crate::collision::{Collider, StaticCollider, segment_aabb_toi, segment_circle_toi};
 use crate::debug::DebugFlags;
 use crate::enemy::Enemy;
 use crate::fx::{FadeOut, ScreenShake, spawn_blood, spawn_impact};
@@ -113,66 +113,92 @@ pub fn bullet_collision(
     for (bullet_entity, bullet_tf, velocity, bullet) in &bullets {
         let start = bullet_tf.translation.xy();
         let end = start + velocity.0 * dt;
-        let mut consumed = false;
 
-        if bullet.friendly {
-            for (enemy_entity, enemy_tf, collider) in &enemies {
-                let radius = collider.radius() + bullet.radius;
-                if let Some(point) =
-                    segment_circle_hit(start, end, enemy_tf.translation.xy(), radius)
-                {
-                    damage.write(Damage {
-                        target: enemy_entity,
-                        amount: bullet.damage,
-                    });
-                    spawn_impact(&mut commands, &assets, point);
-                    spawn_hit_marker(&mut commands, &assets, point);
-                    shake.add(0.02);
-                    commands.entity(bullet_entity).despawn();
-                    consumed = true;
-                    break;
-                }
-            }
-        } else {
-            for (player_entity, player_tf, collider) in &players {
-                let radius = collider.radius() + bullet.radius;
-                if segment_circle_hit(start, end, player_tf.translation.xy(), radius).is_some() {
-                    damage.write(Damage {
-                        target: player_entity,
-                        amount: bullet.damage,
-                    });
-                    shake.add(0.06);
-                    commands.entity(bullet_entity).despawn();
-                    consumed = true;
-                    break;
-                }
-            }
-        }
-
-        if consumed {
-            continue;
-        }
-
+        let mut nearest_obstacle = None;
         for (static_tf, static_collider) in &statics {
-            let blocked = match static_collider.0 {
-                Collider::Circle { radius } => segment_circle_hit(
+            let hit_t = match static_collider.0 {
+                Collider::Circle { radius } => segment_circle_toi(
                     start,
                     end,
                     static_tf.translation.xy(),
                     radius + bullet.radius,
-                )
-                .is_some(),
-                Collider::Aabb { half } => {
-                    segment_aabb_hit(start, end, static_tf.translation.xy(), half)
-                }
+                ),
+                Collider::Aabb { half } => segment_aabb_toi(
+                    start,
+                    end,
+                    static_tf.translation.xy(),
+                    half + Vec2::splat(bullet.radius),
+                ),
             };
-
-            if blocked {
-                spawn_impact(&mut commands, &assets, end);
-                commands.entity(bullet_entity).despawn();
-                break;
+            if let Some(hit_t) = hit_t {
+                if nearest_obstacle.map_or(true, |nearest| hit_t < nearest) {
+                    nearest_obstacle = Some(hit_t);
+                }
             }
         }
+
+        let mut nearest_target = None;
+        if bullet.friendly {
+            for (target, target_tf, collider) in &enemies {
+                let radius = collider.radius() + bullet.radius;
+                if let Some(hit_t) =
+                    segment_circle_toi(start, end, target_tf.translation.xy(), radius)
+                {
+                    if nearest_target.map_or(true, |(nearest, _)| hit_t < nearest) {
+                        nearest_target = Some((hit_t, target));
+                    }
+                }
+            }
+        } else {
+            for (target, target_tf, collider) in &players {
+                let radius = collider.radius() + bullet.radius;
+                if let Some(hit_t) =
+                    segment_circle_toi(start, end, target_tf.translation.xy(), radius)
+                {
+                    if nearest_target.map_or(true, |(nearest, _)| hit_t < nearest) {
+                        nearest_target = Some((hit_t, target));
+                    }
+                }
+            }
+        }
+
+        if let Some((hit_t, target)) = nearest_target
+            .filter(|(target_t, _)| target_precedes_obstacle(*target_t, nearest_obstacle))
+        {
+            damage.write(Damage {
+                target,
+                amount: bullet.damage,
+            });
+            if bullet.friendly {
+                let point = start.lerp(end, hit_t);
+                spawn_impact(&mut commands, &assets, point);
+                spawn_hit_marker(&mut commands, &assets, point);
+                shake.add(0.02);
+            } else {
+                shake.add(0.06);
+            }
+            commands.entity(bullet_entity).despawn();
+        } else if let Some(hit_t) = nearest_obstacle {
+            spawn_impact(&mut commands, &assets, start.lerp(end, hit_t));
+            commands.entity(bullet_entity).despawn();
+        }
+    }
+}
+
+fn target_precedes_obstacle(target_t: f32, obstacle_t: Option<f32>) -> bool {
+    obstacle_t.map_or(true, |obstacle_t| target_t < obstacle_t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projectile_does_not_hit_target_behind_obstacle() {
+        assert!(!target_precedes_obstacle(0.8, Some(0.3)));
+        assert!(target_precedes_obstacle(0.2, Some(0.3)));
+        assert!(target_precedes_obstacle(0.2, None));
+        assert!(!target_precedes_obstacle(0.3, Some(0.3)));
     }
 }
 

@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::arena::{Z_BRIGHT, Z_LIGHT};
+use crate::arena::Z_BRIGHT;
 use crate::assets::GameAssets;
 use crate::combat::{Bullet, Lifetime, Velocity};
-use crate::fx::{FadeOut, ScreenShake, spawn_tracer};
+use crate::fx::{FadeOut, ScreenShake, spawn_casing, spawn_tracer};
 use crate::player::{Aim, Player};
 use crate::states::{GameSet, GameState, gameplay_active};
 use crate::ui::cursor_over_hud;
@@ -103,6 +103,7 @@ fn player_fire(
     mouse: Res<ButtonInput<MouseButton>>,
     window: Single<&Window, With<PrimaryWindow>>,
     assets: Res<GameAssets>,
+    mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
     mut shake: ResMut<ScreenShake>,
     mut player: Query<(&Transform, &Aim, &mut Weapon), With<Player>>,
@@ -155,6 +156,7 @@ fn player_fire(
 
     spawn_tracer(
         &mut commands,
+        &mut images,
         &assets,
         muzzle,
         muzzle + direction * 46.0,
@@ -163,7 +165,7 @@ fn player_fire(
         0.05,
     );
 
-    // muzzle flash: sprite + a brief warm light pool so the dark reads
+    // muzzle flash sprite
     commands.spawn((
         Sprite {
             image: assets.muzzle_flash.clone(),
@@ -179,43 +181,18 @@ fn player_fire(
         },
         DespawnOnExit(GameState::Playing),
     ));
-    commands.spawn((
-        Sprite {
-            image: assets.glow_warm.clone(),
-            custom_size: Some(Vec2::splat(150.0)),
-            color: Color::srgba(1.0, 0.8, 0.45, 0.5),
-            ..default()
-        },
-        Transform::from_xyz(muzzle.x, muzzle.y, Z_LIGHT),
-        FadeOut {
-            timer: 0.08,
-            duration: 0.08,
-        },
-        DespawnOnExit(GameState::Playing),
-    ));
-
     // ejected casing
     let eject = Vec2::from_angle(angle + std::f32::consts::FRAC_PI_2);
     let speed = 40.0 + fastrand::f32() * 45.0;
-    commands.spawn((
-        Sprite {
-            image: assets.casing.clone(),
-            custom_size: Some(Vec2::new(5.0, 3.0)),
-            ..default()
-        },
-        Transform::from_xyz(origin.x, origin.y, Z_BRIGHT).with_rotation(Quat::from_rotation_z(
-            fastrand::f32() * std::f32::consts::TAU,
-        )),
-        crate::fx::Particle {
-            velocity: eject * speed,
-            drag: 4.0,
-        },
-        FadeOut {
-            timer: 0.5,
-            duration: 0.5,
-        },
-        DespawnOnExit(GameState::Playing),
-    ));
+    spawn_casing(
+        &mut commands,
+        &mut images,
+        assets.casing.clone(),
+        origin,
+        fastrand::f32() * std::f32::consts::TAU,
+        eject * speed,
+        0.5,
+    );
 
     shake.add(0.035);
 }

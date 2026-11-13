@@ -4,10 +4,9 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::PrimaryWindow;
 
-use crate::arena::Arena;
 use crate::assets::GameAssets;
 use crate::collision::{Collider, StaticCollider};
-use crate::enemy::{Enemy, EnemyKind, spawn_enemy};
+use crate::enemy::Enemy;
 use crate::player::Player;
 use crate::states::{GameSet, GameState};
 
@@ -70,25 +69,10 @@ fn debug_keys(
     mut flags: ResMut<DebugFlags>,
     mut virtual_time: ResMut<Time<Virtual>>,
     mut commands: Commands,
-    assets: Res<GameAssets>,
-    arena: Res<Arena>,
-    player: Query<&Transform, With<Player>>,
-    enemies: Query<Entity, With<Enemy>>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     if keys.just_pressed(KeyCode::F1) {
         flags.show_colliders = !flags.show_colliders;
-    }
-
-    // F2: ring of mixed hostiles around the player
-    if keys.just_pressed(KeyCode::F2) {
-        spawn_hostile_ring(&mut commands, &assets, &arena, &player);
-    }
-
-    if keys.just_pressed(KeyCode::F3) {
-        for entity in &enemies {
-            commands.entity(entity).despawn();
-        }
     }
 
     if keys.just_pressed(KeyCode::F4) {
@@ -119,91 +103,18 @@ fn debug_keys(
     }
 }
 
-/// Ring of mixed hostiles dropped around the survivor (F2 and demo runs).
-fn spawn_hostile_ring(
-    commands: &mut Commands,
-    assets: &GameAssets,
-    arena: &Arena,
-    player: &Query<&Transform, With<Player>>,
-) {
-    let Ok(player_transform) = player.single() else {
-        return;
-    };
-    let limit = arena.half - Vec2::splat(50.0);
-    for i in 0..10 {
-        let angle = fastrand::f32() * std::f32::consts::TAU;
-        let distance = 160.0 + fastrand::f32() * 200.0;
-        let position = (player_transform.translation.xy() + Vec2::from_angle(angle) * distance)
-            .clamp(-limit, limit);
-        let kind = if i % 3 == 0 {
-            EnemyKind::Raider
-        } else {
-            EnemyKind::Infected
-        };
-        spawn_enemy(commands, assets, kind, position);
-    }
-}
-
-/// Scripted input for `SHITSTORM_DEMO_INPUT`: seeds a hostile ring, then
-/// walks the survivor and fires in bursts so a single screenshot shows
-/// movement, muzzle flashes, the magazine gauge and the reload strip.
+/// Scripted input for `SHITSTORM_DEMO_INPUT`, used for gameplay screenshots.
 fn demo_input(
     time: Res<Time>,
     mut elapsed: Local<f32>,
-    mut seeded: Local<bool>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut window: Single<&mut Window, With<PrimaryWindow>>,
-    camera: Single<(&Camera, &GlobalTransform), Without<Player>>,
-    enemies: Query<&Transform, With<Enemy>>,
-    player: Query<&Transform, With<Player>>,
-    mut commands: Commands,
-    assets: Res<GameAssets>,
-    arena: Res<Arena>,
 ) {
     *elapsed += time.delta_secs();
     let t = *elapsed;
-
-    if !*seeded && !player.is_empty() {
-        *seeded = true;
-        spawn_hostile_ring(&mut commands, &assets, &arena, &player);
-    }
-
-    // aim at the nearest hostile that is not behind a HUD panel, so the
-    // scripted shot stays exactly on target (no clamping to dodge panels,
-    // which would skew the aim badly at contact range)
     let size = window.size();
-    let mut aim_point = None;
-    if let Ok(player_transform) = player.single() {
-        let (camera, camera_transform) = *camera;
-        let player_position = player_transform.translation.xy();
-        let mut best_clear: Option<(f32, Vec2)> = None;
-        let mut nearest_any: Option<(f32, Vec2)> = None;
-        for foe in enemies.iter() {
-            let world = foe.translation.xy();
-            let distance = world.distance_squared(player_position);
-            if nearest_any.is_none_or(|(best, _)| distance < best) {
-                nearest_any = Some((distance, world));
-            }
-            if let Ok(point) = camera.world_to_viewport(camera_transform, foe.translation) {
-                if !crate::ui::hud_blocks(point, size)
-                    && best_clear.is_none_or(|(best, _)| distance < best)
-                {
-                    best_clear = Some((distance, point));
-                }
-            }
-        }
-        aim_point = best_clear.map(|(_, point)| point).or_else(|| {
-            nearest_any.and_then(|(_, world)| {
-                camera
-                    .world_to_viewport(camera_transform, world.extend(0.0))
-                    .ok()
-            })
-        });
-    }
-    window.set_cursor_position(Some(
-        aim_point.unwrap_or(Vec2::new(size.x * 0.6, size.y * 0.4)),
-    ));
+    window.set_cursor_position(Some(Vec2::new(size.x * 0.6, size.y * 0.4)));
 
     // walk north, cut east, then stand and shoot
     let step = if t < 2.0 {

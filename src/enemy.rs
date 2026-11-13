@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 
-use crate::arena::{Arena, Z_BRIGHT, Z_LIGHT, random_edge_point, y_sort};
+use crate::arena::{ACTOR_SORT_OFFSET, Arena, Z_BRIGHT, random_edge_point, y_sort};
 use crate::assets::GameAssets;
 use crate::collision::{
-    Collider, StaticCollider, circle_aabb_pushout, segment_aabb_hit, segment_circle_hit,
+    Collider, StaticCollider, move_circle_with_collisions, segment_aabb_hit, segment_circle_hit,
 };
 use crate::combat::{Bullet, Damage, Health, HitFlash, Lifetime, Velocity};
 use crate::fx::{FadeOut, ScreenShake, spawn_burst, spawn_tracer};
@@ -39,6 +39,7 @@ pub struct EnemySnapshot {
 /// Waves of edge-spawning raids that tighten over time.
 #[derive(Resource)]
 pub struct EnemySpawner {
+    pub enabled: bool,
     pub timer: f32,
     pub interval: f32,
     pub min_interval: f32,
@@ -49,10 +50,11 @@ pub struct EnemySpawner {
 impl Default for EnemySpawner {
     fn default() -> Self {
         Self {
+            enabled: false,
             timer: 1.5,
             interval: 2.6,
             min_interval: 0.75,
-            max_alive: 18,
+            max_alive: 8,
             elapsed: 0.0,
         }
     }
@@ -114,7 +116,11 @@ pub fn spawn_enemy(
                 custom_size: Some(size),
                 ..default()
             },
-            Transform::from_xyz(position.x, position.y, y_sort(position.y)),
+            Transform::from_xyz(
+                position.x,
+                position.y,
+                y_sort(position.y - ACTOR_SORT_OFFSET),
+            ),
             Enemy {
                 kind,
                 speed,
@@ -190,6 +196,10 @@ fn spawn_edge_enemies(
     alive: Query<(), With<Enemy>>,
     player: Query<&Transform, With<Player>>,
 ) {
+    if !spawner.enabled {
+        return;
+    }
+
     let Ok(player_transform) = player.single() else {
         return;
     };
@@ -274,9 +284,11 @@ fn enemy_ai(
     player: Query<(Entity, &Transform, &Collider), (With<Player>, Without<Enemy>)>,
     mut enemies: Query<(Entity, &mut Transform, &mut Enemy, &mut WalkAnim, &Collider), With<Enemy>>,
     statics: Query<(&Transform, &StaticCollider), Without<Enemy>>,
+    mut static_colliders: Local<Vec<(Vec2, Collider)>>,
     mut damage: MessageWriter<Damage>,
     mut commands: Commands,
     assets: Res<GameAssets>,
+    mut images: ResMut<Assets<Image>>,
     mut shake: ResMut<ScreenShake>,
 ) {
     let Ok((player_entity, player_transform, player_collider)) = player.single() else {
@@ -284,7 +296,13 @@ fn enemy_ai(
     };
     let player_position = player_transform.translation.xy();
     let dt = time.delta_secs();
-    let list = snapshot.list.clone();
+    let list = &snapshot.list;
+    static_colliders.clear();
+    static_colliders.extend(
+        statics
+            .iter()
+            .map(|(static_transform, collider)| (static_transform.translation.xy(), collider.0)),
+    );
 
     for (entity, mut transform, mut enemy, mut walk, collider) in &mut enemies {
         let position = transform.translation.xy();
@@ -306,7 +324,7 @@ fn enemy_ai(
         };
 
         // separation from other enemies
-        for &(other_entity, other_position, other_radius) in &list {
+        for &(other_entity, other_position, other_radius) in list {
             if other_entity == entity {
                 continue;
             }
@@ -336,34 +354,10 @@ fn enemy_ai(
             }
         }
 
-        let mut next_position = position + steered * dt;
+        let mut next_position =
+            move_circle_with_collisions(position, steered * dt, radius, &static_colliders);
 
-        for (static_transform, static_collider) in &statics {
-            match static_collider.0 {
-                Collider::Circle {
-                    radius: static_radius,
-                } => {
-                    let delta = next_position - static_transform.translation.xy();
-                    let min_distance = static_radius + radius;
-                    let distance_sq = delta.length_squared();
-                    if distance_sq < min_distance * min_distance && distance_sq > 0.0001 {
-                        next_position += delta.normalize() * (min_distance - distance_sq.sqrt());
-                    }
-                }
-                Collider::Aabb { half } => {
-                    if let Some(push) = circle_aabb_pushout(
-                        next_position,
-                        radius,
-                        static_transform.translation.xy(),
-                        half,
-                    ) {
-                        next_position += push;
-                    }
-                }
-            }
-        }
-
-        for &(other_entity, other_position, other_radius) in &list {
+        for &(other_entity, other_position, other_radius) in list {
             if other_entity == entity {
                 continue;
             }
@@ -392,7 +386,7 @@ fn enemy_ai(
 
         transform.translation.x = next_position.x;
         transform.translation.y = next_position.y;
-        transform.translation.z = y_sort(next_position.y);
+        transform.translation.z = y_sort(next_position.y - ACTOR_SORT_OFFSET);
 
         // facing: aim at the player when engaged, else face movement
         let face_angle = if can_see && center_distance < enemy.attack_range * 1.4 {
@@ -434,6 +428,7 @@ fn enemy_ai(
             enemy.attack_cooldown = enemy.attack_interval;
             fire_raider(
                 &mut commands,
+                &mut images,
                 &assets,
                 position,
                 face_angle,
@@ -467,6 +462,7 @@ fn enemy_ai(
 #[allow(clippy::too_many_arguments)]
 fn fire_raider(
     commands: &mut Commands,
+    images: &mut Assets<Image>,
     assets: &GameAssets,
     position: Vec2,
     angle: f32,
@@ -500,6 +496,7 @@ fn fire_raider(
 
     spawn_tracer(
         commands,
+        images,
         assets,
         muzzle,
         muzzle + direction * 40.0,
@@ -523,21 +520,6 @@ fn fire_raider(
         },
         DespawnOnExit(GameState::Playing),
     ));
-    commands.spawn((
-        Sprite {
-            image: assets.glow_warm.clone(),
-            custom_size: Some(Vec2::splat(130.0)),
-            color: Color::srgba(1.0, 0.75, 0.42, 0.45),
-            ..default()
-        },
-        Transform::from_xyz(muzzle.x, muzzle.y, Z_LIGHT),
-        FadeOut {
-            timer: 0.08,
-            duration: 0.08,
-        },
-        DespawnOnExit(GameState::Playing),
-    ));
-
     shake.add(0.03);
 }
 
@@ -552,7 +534,7 @@ fn animate_enemies(
     for (enemy, walk, mut sprite, mut transform) in &mut enemies {
         sprite.image = frame_of(&assets, enemy.kind, walk.dir, walk.frame);
         sprite.custom_size = Some(Vec2::new(24.0, 36.0));
-        transform.translation.z = y_sort(transform.translation.y);
+        transform.translation.z = y_sort(transform.translation.y - ACTOR_SORT_OFFSET);
     }
 
     for (mut gun, parent) in &mut guns {

@@ -242,26 +242,6 @@ fn reset_stats(mut stats: ResMut<RunStats>) {
 // ---------------------------------------------------------------------------
 
 fn spawn_hud(mut commands: Commands, assets: Res<GameAssets>) {
-    // vignette sits under every HUD element
-    commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0),
-            top: Val::Px(0.0),
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            ..default()
-        },
-        ImageNode {
-            image: assets.vignette.clone(),
-            image_mode: NodeImageMode::Stretch,
-            color: Color::srgba(1.0, 1.0, 1.0, 0.7),
-            ..default()
-        },
-        ZIndex(-10),
-        DespawnOnExit(GameState::Playing),
-    ));
-
     commands
         .spawn((
             Node {
@@ -793,8 +773,14 @@ fn sync_cursor(
 // pause + game over
 // ---------------------------------------------------------------------------
 
-fn toggle_pause(keys: Res<ButtonInput<KeyCode>>, mut paused: ResMut<Paused>) {
-    if keys.just_pressed(KeyCode::Escape) {
+fn toggle_pause(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut paused: ResMut<Paused>,
+    mut app_exit: MessageWriter<AppExit>,
+) {
+    if paused.0 && keys.just_pressed(KeyCode::KeyQ) {
+        app_exit.write(AppExit::Success);
+    } else if keys.just_pressed(KeyCode::Escape) {
         paused.0 = !paused.0;
     }
 }
@@ -836,7 +822,7 @@ fn sync_pause_overlay(
                     },
                 ));
                 parent.spawn((
-                    Text::new("ESC  RESUME"),
+                    Text::new("ESC  RESUME     Q  QUIT"),
                     ui_font(&assets, 18.0, false),
                     TextColor(Color::srgb(0.75, 0.8, 0.8)),
                 ));

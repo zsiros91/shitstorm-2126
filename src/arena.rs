@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::assets::GameAssets;
 use crate::collision::{Collider, StaticCollider};
-use crate::states::{GameState, gameplay_active};
+use crate::states::GameState;
 
 pub const TILE: f32 = 32.0;
 pub const MAP_W: i32 = 64;
@@ -13,14 +13,13 @@ pub const PLAYER_SPAWN: Vec2 = Vec2::new(-16.0, -204.0);
 // z layers ---------------------------------------------------------------
 pub const Z_DECAL: f32 = 0.5;
 pub const Z_SHADOW: f32 = 1.0;
-pub const Z_WIRE: f32 = 1.5;
 pub const Z_DARK: f32 = 100.0;
-pub const Z_LIGHT: f32 = 110.0;
 pub const Z_BRIGHT: f32 = 150.0;
+pub const ACTOR_SORT_OFFSET: f32 = 18.0;
 
 /// Actors and props sort slightly by y so southern things draw on top.
 pub fn y_sort(y: f32) -> f32 {
-    2.0 + (y + HALF.y) * 0.0005
+    2.0 + (HALF.y - y) * 0.0005
 }
 
 #[derive(Component)]
@@ -28,15 +27,6 @@ pub struct Tile;
 
 #[derive(Component)]
 pub struct GroundDecal;
-
-/// A placed pool of light rendered above the night overlay.
-#[derive(Component)]
-pub struct LightPool {
-    pub base_size: f32,
-    pub base_alpha: f32,
-    pub flicker: f32,
-    pub phase: f32,
-}
 
 #[derive(Resource)]
 pub struct Arena {
@@ -54,8 +44,7 @@ pub struct ArenaPlugin;
 impl Plugin for ArenaPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Arena>()
-            .add_systems(OnEnter(GameState::Playing), spawn_arena)
-            .add_systems(Update, flicker_lights.run_if(gameplay_active));
+            .add_systems(OnEnter(GameState::Playing), spawn_arena);
     }
 }
 
@@ -248,63 +237,19 @@ fn spawn_prop(
     shadow: Vec2,
 ) {
     spawn_shadow(commands, assets, position, shadow);
+    let sort_extent_y = rotation.sin().abs() * size.x * 0.5 + rotation.cos().abs() * size.y * 0.5;
     let mut entity = commands.spawn((
         Sprite {
             image,
             custom_size: Some(size),
             ..default()
         },
-        Transform::from_xyz(position.x, position.y, y_sort(position.y))
+        Transform::from_xyz(position.x, position.y, y_sort(position.y - sort_extent_y))
             .with_rotation(Quat::from_rotation_z(rotation)),
         DespawnOnExit(GameState::Playing),
     ));
     if let Some(collider) = collider {
         entity.insert(StaticCollider(collider));
-    }
-}
-
-fn spawn_light(
-    commands: &mut Commands,
-    position: Vec2,
-    size: f32,
-    image: Handle<Image>,
-    color: Color,
-    alpha: f32,
-    flicker: f32,
-) {
-    commands.spawn((
-        Sprite {
-            image,
-            custom_size: Some(Vec2::splat(size)),
-            color: color.with_alpha(alpha),
-            ..default()
-        },
-        Transform::from_xyz(position.x, position.y, Z_LIGHT),
-        LightPool {
-            base_size: size,
-            base_alpha: alpha,
-            flicker,
-            phase: fastrand::f32() * std::f32::consts::TAU,
-        },
-        DespawnOnExit(GameState::Playing),
-    ));
-}
-
-fn flicker_lights(time: Res<Time>, mut lights: Query<(&LightPool, &mut Sprite, &mut Transform)>) {
-    let t = time.elapsed_secs();
-    for (light, mut sprite, mut transform) in &mut lights {
-        if light.flicker <= 0.0 {
-            continue;
-        }
-        let wave =
-            (t * 11.0 + light.phase).sin() * 0.6 + (t * 27.0 + light.phase * 2.0).sin() * 0.4;
-        let nudge = wave * light.flicker;
-        let size = light.base_size * (1.0 + nudge * 0.05);
-        transform.translation.z = Z_LIGHT;
-        sprite.custom_size = Some(Vec2::splat(size));
-        sprite
-            .color
-            .set_alpha((light.base_alpha * (1.0 + nudge * 0.18)).clamp(0.0, 1.0));
     }
 }
 
@@ -336,26 +281,6 @@ fn wall_image(assets: &GameAssets, kind: &str, col: i32, row: i32) -> Handle<Ima
         "concrete_broken" => assets.wall_concrete_broken.clone(),
         _ => assets.walls_metal[(h % 2) as usize].clone(),
     }
-}
-
-fn spawn_wire(commands: &mut Commands, assets: &GameAssets, a: Vec2, b: Vec2) {
-    let delta = b - a;
-    let length = delta.length();
-    if length < 8.0 {
-        return;
-    }
-    let angle = delta.y.atan2(delta.x);
-    let mid = (a + b) * 0.5;
-    commands.spawn((
-        Sprite {
-            image: assets.wire.clone(),
-            custom_size: Some(Vec2::new(length, 3.0)),
-            color: Color::srgba(0.75, 0.75, 0.8, 1.0),
-            ..default()
-        },
-        Transform::from_xyz(mid.x, mid.y, Z_WIRE).with_rotation(Quat::from_rotation_z(angle)),
-        DespawnOnExit(GameState::Playing),
-    ));
 }
 
 fn spawn_decal(
@@ -420,7 +345,11 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
                         custom_size: Some(Vec2::splat(TILE + 1.0)),
                         ..default()
                     },
-                    Transform::from_xyz(position.x, position.y, y_sort(position.y)),
+                    Transform::from_xyz(
+                        position.x,
+                        position.y,
+                        y_sort(position.y - (TILE + 1.0) * 0.5),
+                    ),
                     StaticCollider(Collider::aabb(Vec2::splat(16.0))),
                     DespawnOnExit(GameState::Playing),
                 ));
@@ -443,46 +372,6 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
     // -----------------------------------------------------------------
     // south-west lot: the squatter camp
     let p = |c: i32, r: i32| wp(c, r);
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.rv_wreck.clone(),
-        p(8, 10),
-        Vec2::new(88.0, 44.0),
-        Some(Collider::aabb(Vec2::new(44.0, 20.0))),
-        0.0,
-        Vec2::new(96.0, 48.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.car_wrecks[0].clone(),
-        p(15, 15),
-        Vec2::new(60.0, 34.0),
-        Some(Collider::aabb(Vec2::new(30.0, 16.0))),
-        0.0,
-        Vec2::new(66.0, 38.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.car_wrecks[1].clone(),
-        p(5, 16),
-        Vec2::new(60.0, 34.0),
-        Some(Collider::aabb(Vec2::new(16.0, 30.0))),
-        half_turn,
-        Vec2::new(66.0, 38.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.dumpsters[0].clone(),
-        p(19, 7),
-        Vec2::new(44.0, 26.0),
-        Some(Collider::aabb(Vec2::new(22.0, 13.0))),
-        0.0,
-        Vec2::new(48.0, 30.0),
-    );
     spawn_prop(
         &mut commands,
         &assets,
@@ -513,140 +402,7 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
         0.0,
         Vec2::splat(34.0),
     );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.tire_piles[0].clone(),
-        p(17, 4),
-        Vec2::new(24.0, 20.0),
-        Some(Collider::circle(8.0)),
-        0.0,
-        Vec2::new(26.0, 22.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.crate_wood.clone(),
-        p(20, 16),
-        Vec2::new(24.0, 24.0),
-        Some(Collider::aabb(Vec2::splat(11.0))),
-        0.0,
-        Vec2::new(28.0, 26.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.barrel_rust.clone(),
-        p(22, 17),
-        Vec2::new(20.0, 22.0),
-        Some(Collider::circle(9.0)),
-        0.0,
-        Vec2::new(24.0, 24.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.barrel_blue.clone(),
-        p(23, 16),
-        Vec2::new(20.0, 22.0),
-        Some(Collider::circle(9.0)),
-        0.0,
-        Vec2::new(24.0, 24.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.sandbags.clone(),
-        p(7, 3),
-        Vec2::new(42.0, 18.0),
-        Some(Collider::aabb(Vec2::new(20.0, 8.0))),
-        0.0,
-        Vec2::new(46.0, 20.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.barrier.clone(),
-        p(24, 23),
-        Vec2::new(36.0, 14.0),
-        Some(Collider::aabb(Vec2::new(18.0, 7.0))),
-        0.0,
-        Vec2::new(40.0, 16.0),
-    );
-
-    // fire barrel in the camp -- the warmest light in the lot
-    let fire_pos = p(16, 13);
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.barrel_rust.clone(),
-        fire_pos,
-        Vec2::new(20.0, 22.0),
-        Some(Collider::circle(9.0)),
-        0.0,
-        Vec2::new(24.0, 24.0),
-    );
-    spawn_light(
-        &mut commands,
-        fire_pos,
-        150.0,
-        assets.glow_fire.clone(),
-        Color::srgb(1.0, 0.62, 0.3),
-        0.75,
-        0.85,
-    );
-
     // north-east lot: gas station
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.gas_pump.clone(),
-        p(40, 32),
-        Vec2::new(20.0, 30.0),
-        Some(Collider::aabb(Vec2::new(9.0, 14.0))),
-        0.0,
-        Vec2::new(24.0, 32.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.gas_pump.clone(),
-        p(40, 35),
-        Vec2::new(20.0, 30.0),
-        Some(Collider::aabb(Vec2::new(9.0, 14.0))),
-        0.0,
-        Vec2::new(24.0, 32.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.car_wrecks[2].clone(),
-        p(44, 31),
-        Vec2::new(60.0, 34.0),
-        Some(Collider::aabb(Vec2::new(30.0, 16.0))),
-        0.0,
-        Vec2::new(66.0, 38.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.car_wrecks[0].clone(),
-        p(60, 33),
-        Vec2::new(60.0, 34.0),
-        Some(Collider::aabb(Vec2::new(30.0, 16.0))),
-        0.0,
-        Vec2::new(66.0, 38.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.dumpsters[1].clone(),
-        p(47, 46),
-        Vec2::new(44.0, 26.0),
-        Some(Collider::aabb(Vec2::new(22.0, 13.0))),
-        0.0,
-        Vec2::new(48.0, 30.0),
-    );
     spawn_prop(
         &mut commands,
         &assets,
@@ -669,27 +425,6 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
         0.0,
         Vec2::new(52.0, 18.0),
     );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.shelf.clone(),
-        p(53, 40),
-        Vec2::new(44.0, 16.0),
-        Some(Collider::aabb(Vec2::new(22.0, 8.0))),
-        0.0,
-        Vec2::new(48.0, 18.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.crate_metal.clone(),
-        p(56, 42),
-        Vec2::new(24.0, 24.0),
-        Some(Collider::aabb(Vec2::splat(11.0))),
-        0.0,
-        Vec2::new(28.0, 26.0),
-    );
-
     // store fittings
     spawn_prop(
         &mut commands,
@@ -701,143 +436,7 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
         0.0,
         Vec2::new(52.0, 18.0),
     );
-    for (c, r) in [(9, 35), (9, 38), (9, 41), (16, 35), (16, 38), (16, 41)] {
-        spawn_prop(
-            &mut commands,
-            &assets,
-            assets.shelf.clone(),
-            p(c, r),
-            Vec2::new(44.0, 16.0),
-            Some(Collider::aabb(Vec2::new(22.0, 8.0))),
-            0.0,
-            Vec2::new(48.0, 18.0),
-        );
-    }
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.sofa.clone(),
-        p(20, 42),
-        Vec2::new(36.0, 24.0),
-        Some(Collider::aabb(Vec2::new(18.0, 11.0))),
-        0.0,
-        Vec2::new(40.0, 26.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.table.clone(),
-        p(13, 42),
-        Vec2::new(26.0, 22.0),
-        Some(Collider::aabb(Vec2::new(13.0, 10.0))),
-        0.0,
-        Vec2::new(30.0, 24.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.chair.clone(),
-        p(15, 43),
-        Vec2::new(14.0, 16.0),
-        None,
-        0.0,
-        Vec2::new(16.0, 18.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.chair.clone(),
-        p(12, 40),
-        Vec2::new(14.0, 16.0),
-        None,
-        half_turn,
-        Vec2::new(16.0, 18.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.crate_wood.clone(),
-        p(19, 31),
-        Vec2::new(24.0, 24.0),
-        Some(Collider::aabb(Vec2::splat(11.0))),
-        0.0,
-        Vec2::new(28.0, 26.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.barrel_blue.clone(),
-        p(7, 43),
-        Vec2::new(20.0, 22.0),
-        Some(Collider::circle(9.0)),
-        0.0,
-        Vec2::new(24.0, 24.0),
-    );
-
     // south-east wasteland lot
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.car_wrecks[1].clone(),
-        p(52, 12),
-        Vec2::new(60.0, 34.0),
-        Some(Collider::aabb(Vec2::new(16.0, 30.0))),
-        half_turn,
-        Vec2::new(66.0, 38.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.rocks[0].clone(),
-        p(41, 6),
-        Vec2::new(26.0, 22.0),
-        Some(Collider::circle(10.0)),
-        0.0,
-        Vec2::new(28.0, 24.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.rocks[1].clone(),
-        p(48, 17),
-        Vec2::new(20.0, 17.0),
-        Some(Collider::circle(8.0)),
-        0.0,
-        Vec2::new(22.0, 19.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.rocks[2].clone(),
-        p(58, 5),
-        Vec2::new(15.0, 13.0),
-        Some(Collider::circle(6.0)),
-        0.0,
-        Vec2::new(17.0, 15.0),
-    );
-
-    // dry scrub scattered across the open ground (walk-through, no collider)
-    for _ in 0..46 {
-        let position = Vec2::new(
-            (fastrand::f32() * 2.0 - 1.0) * (HALF.x - 40.0),
-            (fastrand::f32() * 2.0 - 1.0) * (HALF.y - 40.0),
-        );
-        if position.distance(Vec2::new(PLAYER_SPAWN.x, PLAYER_SPAWN.y)) < 60.0 {
-            continue;
-        }
-        let variant = if fastrand::f32() < 0.5 { 0 } else { 1 };
-        let width = 14.0 + fastrand::f32() * 10.0;
-        spawn_prop(
-            &mut commands,
-            &assets,
-            assets.shrubs[variant].clone(),
-            position,
-            Vec2::new(width, width * 0.8),
-            None,
-            0.0,
-            Vec2::new(width * 0.7, width * 0.5),
-        );
-    }
     spawn_prop(
         &mut commands,
         &assets,
@@ -861,238 +460,12 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
     spawn_prop(
         &mut commands,
         &assets,
-        assets.tire_piles[1].clone(),
-        p(50, 4),
-        Vec2::new(24.0, 20.0),
-        Some(Collider::circle(8.0)),
-        0.0,
-        Vec2::new(26.0, 22.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.barrel_rust.clone(),
-        p(55, 8),
-        Vec2::new(20.0, 22.0),
-        Some(Collider::circle(9.0)),
-        0.0,
-        Vec2::new(24.0, 24.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.barrel_blue.clone(),
-        p(56, 9),
-        Vec2::new(20.0, 22.0),
-        Some(Collider::circle(9.0)),
-        0.0,
-        Vec2::new(24.0, 24.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.barrier.clone(),
-        p(46, 15),
-        Vec2::new(36.0, 14.0),
-        Some(Collider::aabb(Vec2::new(18.0, 7.0))),
-        0.0,
-        Vec2::new(40.0, 16.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.palm.clone(),
-        p(38, 10),
-        Vec2::splat(40.0),
-        Some(Collider::circle(8.0)),
-        0.0,
-        Vec2::splat(30.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.yuccas[0].clone(),
-        p(57, 16),
-        Vec2::splat(40.0),
-        Some(Collider::circle(7.0)),
-        0.0,
-        Vec2::splat(30.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.yuccas[1].clone(),
-        p(43, 18),
-        Vec2::splat(40.0),
-        Some(Collider::circle(7.0)),
-        0.0,
-        Vec2::splat(30.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.yuccas[1].clone(),
-        p(4, 30),
-        Vec2::splat(40.0),
-        Some(Collider::circle(7.0)),
-        0.0,
-        Vec2::splat(30.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.palm.clone(),
-        p(3, 44),
-        Vec2::splat(40.0),
-        Some(Collider::circle(8.0)),
-        0.0,
-        Vec2::splat(30.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
         assets.dead_trees[1].clone(),
         p(25, 46),
         Vec2::splat(46.0),
         Some(Collider::circle(9.0)),
         0.0,
         Vec2::splat(34.0),
-    );
-    spawn_prop(
-        &mut commands,
-        &assets,
-        assets.road_sign.clone(),
-        p(36, 17),
-        Vec2::new(26.0, 34.0),
-        Some(Collider::circle(6.0)),
-        0.0,
-        Vec2::new(28.0, 36.0),
-    );
-
-    // -----------------------------------------------------------------
-    // street furniture: poles, wires, lamps, signals
-    // -----------------------------------------------------------------
-    let pole_row = |commands: &mut Commands, col: i32, row: i32, rot: f32| -> Vec2 {
-        let position = wp(col, row);
-        spawn_prop(
-            commands,
-            &assets,
-            assets.pole.clone(),
-            position,
-            Vec2::new(28.0, 34.0),
-            Some(Collider::circle(7.0)),
-            rot,
-            Vec2::new(26.0, 24.0),
-        );
-        position
-    };
-
-    let row28 = [5, 13, 21, 41, 49, 57];
-    let mut positions: Vec<Vec2> = row28
-        .iter()
-        .map(|&c| pole_row(&mut commands, c, 28, half_turn))
-        .collect();
-    for pair in positions.windows(2) {
-        spawn_wire(&mut commands, &assets, pair[0], pair[1]);
-    }
-    positions = [9, 17, 45, 53]
-        .iter()
-        .map(|&c| pole_row(&mut commands, c, 20, half_turn))
-        .collect();
-    for pair in positions.windows(2) {
-        if pair[0].x < 300.0 && pair[1].x < 300.0 || pair[0].x > 700.0 && pair[1].x > 700.0 {
-            spawn_wire(&mut commands, &assets, pair[0], pair[1]);
-        }
-    }
-    positions = [8, 16, 36, 44]
-        .iter()
-        .map(|&c| pole_row(&mut commands, 27, c, 0.0))
-        .collect();
-    for pair in positions.windows(2) {
-        spawn_wire(&mut commands, &assets, pair[0], pair[1]);
-    }
-    positions = [6, 14, 38]
-        .iter()
-        .map(|&c| pole_row(&mut commands, 35, c, 0.0))
-        .collect();
-    for pair in positions.windows(2) {
-        spawn_wire(&mut commands, &assets, pair[0], pair[1]);
-    }
-
-    // lamps at the crossing corners plus the far ends of both sidewalks
-    for (c, r) in [
-        (27, 20),
-        (35, 20),
-        (27, 28),
-        (35, 28),
-        (5, 20),
-        (59, 20),
-        (5, 28),
-        (59, 28),
-    ] {
-        let position = wp(c, r);
-        spawn_prop(
-            &mut commands,
-            &assets,
-            assets.street_lamp.clone(),
-            position,
-            Vec2::new(16.0, 30.0),
-            Some(Collider::circle(5.0)),
-            0.0,
-            Vec2::new(20.0, 22.0),
-        );
-        spawn_light(
-            &mut commands,
-            position,
-            300.0,
-            assets.glow_warm.clone(),
-            Color::srgb(1.0, 0.78, 0.5),
-            0.5,
-            0.12,
-        );
-    }
-
-    for (c, r) in [(26, 20), (36, 28)] {
-        let position = wp(c, r);
-        spawn_prop(
-            &mut commands,
-            &assets,
-            assets.traffic_light.clone(),
-            position,
-            Vec2::new(14.0, 26.0),
-            Some(Collider::circle(5.0)),
-            0.0,
-            Vec2::new(18.0, 28.0),
-        );
-    }
-
-    // light spill from fixtures we never see: shop, forecourt, store
-    spawn_light(
-        &mut commands,
-        wp(52, 40),
-        260.0,
-        assets.glow_warm.clone(),
-        Color::srgb(1.0, 0.8, 0.55),
-        0.42,
-        0.05,
-    );
-    spawn_light(
-        &mut commands,
-        wp(42, 33),
-        280.0,
-        assets.glow_warm.clone(),
-        Color::srgb(1.0, 0.82, 0.58),
-        0.4,
-        0.08,
-    );
-    spawn_light(
-        &mut commands,
-        wp(15, 37),
-        300.0,
-        assets.glow_warm.clone(),
-        Color::srgb(1.0, 0.78, 0.52),
-        0.4,
-        0.1,
     );
 
     // -----------------------------------------------------------------
@@ -1166,18 +539,6 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
                     0.9,
                 );
             }
-            if is_road && h3 % 100 < 6 {
-                let on_hw = (21..=27).contains(&row);
-                let rot = if on_hw { 0.0 } else { half_turn };
-                spawn_decal(
-                    &mut commands,
-                    assets.decal_tire[(h1 % 2) as usize].clone(),
-                    position,
-                    32.0,
-                    rot,
-                    0.8,
-                );
-            }
             if is_road && h1 % 100 < 3 {
                 spawn_decal(
                     &mut commands,
@@ -1232,4 +593,14 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
         2.2,
         0.9,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::y_sort;
+
+    #[test]
+    fn lower_world_y_sorts_in_front() {
+        assert!(y_sort(-10.0) > y_sort(10.0));
+    }
 }
