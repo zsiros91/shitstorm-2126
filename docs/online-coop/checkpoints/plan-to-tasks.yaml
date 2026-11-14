@@ -1,0 +1,159 @@
+metadata:
+  generated: "2026-11-13"
+  source_plan: "docs/online-coop/plan.md"
+  target_tasks: "inline checklist in docs/online-coop/plan.md"
+
+summary:
+  total_plan_items: 12
+  covered_plan_items: 12
+  missing_plan_items: 0
+  coverage_percentage: 100.0
+  total_tasks_generated: 12
+  orphan_tasks: 0
+
+phases:
+  - phase_id: "Phase-1"
+    phase_name: "Foundational networking"
+    items:
+      - item_id: "1.1"
+        description: "Add transport and protocol foundations"
+        tasks:
+          - task_id: "T001"
+            description: "Add transport dependency and versioned protocol"
+        notes: ""
+      - item_id: "1.2"
+        description: "Add network roles and stable identities"
+        tasks:
+          - task_id: "T002"
+            description: "Add network roles, IDs, and game-state transitions"
+        notes: ""
+  - phase_id: "Phase-2"
+    phase_name: "Host and join a two-player session"
+    items:
+      - item_id: "2.1"
+        description: "Implement direct-IP session lifecycle"
+        tasks:
+          - task_id: "T003"
+            description: "Implement host bind, guest connect, handshake, and timeouts"
+        notes: ""
+      - item_id: "2.2"
+        description: "Route independent player input"
+        tasks:
+          - task_id: "T004"
+            description: "Assign player ownership and validate sequenced inputs"
+        notes: ""
+  - phase_id: "Phase-3"
+    phase_name: "Play a shared authoritative run"
+    items:
+      - item_id: "3.1"
+        description: "Make gameplay systems multi-player and host-authoritative"
+        tasks:
+          - task_id: "T005"
+            description: "Refactor player systems and gate gameplay simulation to host"
+        notes: ""
+      - item_id: "3.2"
+        description: "Target and spawn around both players"
+        tasks:
+          - task_id: "T006"
+            description: "Update enemy target selection, spawning, and damage targets"
+        notes: ""
+      - item_id: "3.3"
+        description: "Replicate the host's gameplay state"
+        tasks:
+          - task_id: "T007"
+            description: "Replicate stable-ID snapshots and lifecycle events"
+        notes: ""
+      - item_id: "3.4"
+        description: "Smooth client-side presentation"
+        tasks:
+          - task_id: "T008"
+            description: "Add local prediction, reconciliation, and remote interpolation"
+        notes: ""
+  - phase_id: "Phase-4"
+    phase_name: "Connect, understand, and recover from session changes"
+    items:
+      - item_id: "4.1"
+        description: "Add host/join and per-player presentation"
+        tasks:
+          - task_id: "T009"
+            description: "Add host/join UI, local camera, and player-specific HUD"
+        notes: ""
+      - item_id: "4.2"
+        description: "Handle disconnects and invalid traffic"
+        tasks:
+          - task_id: "T010"
+            description: "Enforce protocol bounds and implement disconnect behavior"
+        notes: ""
+  - phase_id: "Phase-5"
+    phase_name: "Cross-cutting validation"
+    items:
+      - item_id: "5.1"
+        description: "Add network and gameplay regression tests"
+        tasks:
+          - task_id: "T011"
+            description: "Add protocol, authority, and loopback integration tests"
+        notes: ""
+      - item_id: "5.2"
+        description: "Validate real direct-IP play"
+        tasks:
+          - task_id: "T012"
+            description: "Run LAN/internet validation and document UDP port setup"
+        notes: ""
+
+missing_plan_items: []
+orphan_tasks: []
+
+upstream_trace:
+  - plan_item: "1.1"
+    source_requirements: ["REQ-001", "REQ-002", "REQ-007"]
+    tasks: ["T001"]
+    full_trace: "REQ-001,REQ-002,REQ-007 -> Phase-1.1 -> T001"
+  - plan_item: "1.2"
+    source_requirements: ["REQ-001", "REQ-003", "REQ-004"]
+    tasks: ["T002"]
+    full_trace: "REQ-001,REQ-003,REQ-004 -> Phase-1.2 -> T002"
+  - plan_item: "2.1"
+    source_requirements: ["REQ-001", "REQ-002", "REQ-006"]
+    tasks: ["T003"]
+    full_trace: "REQ-001,REQ-002,REQ-006 -> Phase-2.1 -> T003"
+  - plan_item: "2.2"
+    source_requirements: ["REQ-003"]
+    tasks: ["T004"]
+    full_trace: "REQ-003 -> Phase-2.2 -> T004"
+  - plan_item: "3.1"
+    source_requirements: ["REQ-001", "REQ-003", "REQ-004"]
+    tasks: ["T005"]
+    full_trace: "REQ-001,REQ-003,REQ-004 -> Phase-3.1 -> T005"
+  - plan_item: "3.2"
+    source_requirements: ["REQ-004", "REQ-005"]
+    tasks: ["T006"]
+    full_trace: "REQ-004,REQ-005 -> Phase-3.2 -> T006"
+  - plan_item: "3.3"
+    source_requirements: ["REQ-004", "REQ-005", "REQ-007"]
+    tasks: ["T007"]
+    full_trace: "REQ-004,REQ-005,REQ-007 -> Phase-3.3 -> T007"
+  - plan_item: "3.4"
+    source_requirements: ["REQ-004", "REQ-005"]
+    tasks: ["T008"]
+    full_trace: "REQ-004,REQ-005 -> Phase-3.4 -> T008"
+  - plan_item: "4.1"
+    source_requirements: ["REQ-002", "REQ-003", "REQ-006"]
+    tasks: ["T009"]
+    full_trace: "REQ-002,REQ-003,REQ-006 -> Phase-4.1 -> T009"
+  - plan_item: "4.2"
+    source_requirements: ["REQ-006", "REQ-007"]
+    tasks: ["T010"]
+    full_trace: "REQ-006,REQ-007 -> Phase-4.2 -> T010"
+  - plan_item: "5.1"
+    source_requirements: ["REQ-007"]
+    tasks: ["T011"]
+    full_trace: "REQ-007 -> Phase-5.1 -> T011"
+  - plan_item: "5.2"
+    source_requirements: ["REQ-002", "REQ-006", "REQ-007"]
+    tasks: ["T012"]
+    full_trace: "REQ-002,REQ-006,REQ-007 -> Phase-5.2 -> T012"
+
+validation:
+  passed: true
+  errors: []
+  warnings: []

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 bevy = { version = "0.19.1", default-features = false, features = ["2d", "ui"] }
 fastrand = "2"
+vleue_navigator = { version = "=0.16.0", default-features = false }
 
 [profile.dev]
 opt-level = 1

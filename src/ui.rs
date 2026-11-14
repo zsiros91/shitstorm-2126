@@ -391,7 +391,7 @@ fn spawn_hud(mut commands: Commands, assets: Res<GameAssets>) {
                     bottom: Val::Px(70.0),
                     ..default()
                 },
-                Text::new("WASD MOVE   SHIFT SPRINT   LMB FIRE   R RELOAD   ESC PAUSE"),
+                Text::new("WASD MOVE   SHIFT SPRINT   LMB FIRE   R RELOAD   T TURRET   ESC PAUSE"),
                 ui_font(&assets, 12.0, false),
                 TextColor(Color::srgba(0.66, 0.72, 0.7, 0.92)),
                 TextShadow {
@@ -642,7 +642,6 @@ fn update_hud(
     )>,
     mut flashes: Query<&mut DamageFlash>,
     mut last_health: Local<f32>,
-    time: Res<Time>,
 ) {
     let Ok((health, stamina, weapon)) = player.single() else {
         return;
@@ -713,7 +712,6 @@ fn update_hud(
         if dropped {
             flash.timer = 0.35;
         }
-        flash.timer = (flash.timer - time.delta_secs()).max(0.0);
     }
 }
 

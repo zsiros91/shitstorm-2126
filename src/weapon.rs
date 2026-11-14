@@ -16,6 +16,8 @@ pub struct Weapon {
     pub damage: f32,
     pub bullet_radius: f32,
     pub bullet_speed: f32,
+    /// Distance from the player origin to the barrel tip, in world units.
+    pub muzzle_offset: f32,
     pub fire_interval: f32,
     pub cooldown: f32,
     pub mag: u32,
@@ -32,6 +34,7 @@ impl Weapon {
             damage: 22.0,
             bullet_radius: 4.0,
             bullet_speed: 940.0,
+            muzzle_offset: 23.0,
             fire_interval: 0.11,
             cooldown: 0.0,
             mag: MAG_SIZE,
@@ -132,7 +135,7 @@ fn player_fire(
     let direction = Vec2::from_angle(angle);
 
     let origin = transform.translation.xy();
-    let muzzle = origin + direction * 14.0;
+    let muzzle = origin + direction * weapon.muzzle_offset;
 
     // the projectile
     commands.spawn((

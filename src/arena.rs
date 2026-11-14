@@ -3,6 +3,9 @@ use bevy::prelude::*;
 use crate::assets::GameAssets;
 use crate::collision::{Collider, StaticCollider};
 use crate::states::GameState;
+use vleue_navigator::prelude::{
+    NavMeshSettings, NavMeshUpdateMode, PrimitiveObstacle, Triangulation,
+};
 
 pub const TILE: f32 = 32.0;
 pub const MAP_W: i32 = 64;
@@ -27,6 +30,9 @@ pub struct Tile;
 
 #[derive(Component)]
 pub struct GroundDecal;
+
+#[derive(Component)]
+pub struct NavigationObstacle;
 
 #[derive(Resource)]
 pub struct Arena {
@@ -249,7 +255,20 @@ fn spawn_prop(
         DespawnOnExit(GameState::Playing),
     ));
     if let Some(collider) = collider {
-        entity.insert(StaticCollider(collider));
+        entity.insert((
+            StaticCollider(collider),
+            navigation_obstacle(collider),
+            NavigationObstacle,
+        ));
+    }
+}
+
+fn navigation_obstacle(collider: Collider) -> PrimitiveObstacle {
+    match collider {
+        Collider::Circle { radius } => PrimitiveObstacle::Circle(Circle::new(radius)),
+        Collider::Aabb { half } => {
+            PrimitiveObstacle::Rectangle(Rectangle::new(half.x * 2.0, half.y * 2.0))
+        }
     }
 }
 
@@ -308,6 +327,24 @@ fn spawn_decal(
 fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
     let half_turn = std::f32::consts::FRAC_PI_2;
 
+    let map_edges = [
+        Vec2::new(-HALF.x, -HALF.y),
+        Vec2::new(HALF.x, -HALF.y),
+        Vec2::new(HALF.x, HALF.y),
+        Vec2::new(-HALF.x, HALF.y),
+    ];
+    commands.spawn((
+        NavMeshSettings {
+            fixed: Triangulation::from_outer_edges(&map_edges),
+            agent_radius: 9.0,
+            agent_radius_on_outer_edge: true,
+            ..default()
+        },
+        NavMeshUpdateMode::Debounced(0.2),
+        Transform::IDENTITY,
+        DespawnOnExit(GameState::Playing),
+    ));
+
     // -----------------------------------------------------------------
     // ground tiles
     // -----------------------------------------------------------------
@@ -351,6 +388,8 @@ fn spawn_arena(mut commands: Commands, assets: Res<GameAssets>) {
                         y_sort(position.y - (TILE + 1.0) * 0.5),
                     ),
                     StaticCollider(Collider::aabb(Vec2::splat(16.0))),
+                    navigation_obstacle(Collider::aabb(Vec2::splat(16.0))),
+                    NavigationObstacle,
                     DespawnOnExit(GameState::Playing),
                 ));
                 if broken && hash(col + 3, row + 8) % 2 == 0 {

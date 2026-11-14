@@ -15,6 +15,7 @@ pub struct HealthBar {
 pub fn spawn_health_bar(
     commands: &mut Commands,
     owner: Entity,
+    owner_position: Vec2,
     width: f32,
     offset_y: f32,
     hostile: bool,
@@ -24,7 +25,7 @@ pub fn spawn_health_bar(
             Color::srgba(0.03, 0.04, 0.05, 0.85),
             Vec2::new(width + 4.0, 6.0),
         ),
-        Transform::from_xyz(0.0, 0.0, 151.0),
+        Transform::from_xyz(owner_position.x, owner_position.y + offset_y, 151.0),
         HealthBar {
             owner,
             width,
@@ -42,7 +43,7 @@ pub fn spawn_health_bar(
     };
     commands.spawn((
         Sprite::from_color(color, Vec2::new(width, 3.0)),
-        Transform::from_xyz(0.0, 0.0, 152.0),
+        Transform::from_xyz(owner_position.x, owner_position.y + offset_y, 152.0),
         HealthBar {
             owner,
             width,
@@ -102,5 +103,41 @@ fn update_health_bars(
             sprite.custom_size = Some(Vec2::new(bar.width + 4.0, 6.0));
             transform.translation.x = position.x;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HealthBar, spawn_health_bar};
+    use crate::combat::Health;
+    use bevy::prelude::*;
+
+    #[test]
+    fn health_bars_spawn_at_the_owner_position() {
+        let mut app = App::new();
+        let owner = app
+            .world_mut()
+            .spawn((Transform::default(), Health::new(100.0)))
+            .id();
+        let owner_position = Vec2::new(120.0, -70.0);
+
+        app.add_systems(Startup, move |mut commands: Commands| {
+            spawn_health_bar(&mut commands, owner, owner_position, 26.0, 25.0, true);
+        });
+        app.update();
+
+        let world = app.world_mut();
+        let mut query = world.query::<(&HealthBar, &Transform)>();
+        let positions: Vec<_> = query
+            .iter(world)
+            .map(|(_, transform)| transform.translation.xy())
+            .collect();
+
+        assert_eq!(positions.len(), 2);
+        assert!(
+            positions
+                .iter()
+                .all(|position| *position == Vec2::new(120.0, -45.0))
+        );
     }
 }

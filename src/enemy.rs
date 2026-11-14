@@ -10,6 +10,9 @@ use crate::fx::{FadeOut, ScreenShake, spawn_burst, spawn_tracer};
 use crate::healthbar::spawn_health_bar;
 use crate::player::{Player, WalkAnim};
 use crate::states::{GameSet, GameState, gameplay_active};
+use vleue_navigator::prelude::{ManagedNavMesh, NavMesh, NavMeshStatus};
+
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnemyKind {
@@ -24,6 +27,8 @@ pub struct Enemy {
     pub kind: EnemyKind,
     pub speed: f32,
     pub damage: f32,
+    /// Distance from the enemy origin to its barrel tip, in world units.
+    pub muzzle_offset: f32,
     pub attack_range: f32,
     pub attack_interval: f32,
     pub attack_cooldown: f32,
@@ -43,6 +48,7 @@ pub struct EnemySpawner {
     pub timer: f32,
     pub interval: f32,
     pub min_interval: f32,
+    pub wave_size: usize,
     pub max_alive: usize,
     pub elapsed: f32,
 }
@@ -50,11 +56,12 @@ pub struct EnemySpawner {
 impl Default for EnemySpawner {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             timer: 1.5,
             interval: 2.6,
             min_interval: 0.75,
-            max_alive: 8,
+            wave_size: 20,
+            max_alive: 30,
             elapsed: 0.0,
         }
     }
@@ -70,6 +77,7 @@ impl Plugin for EnemyPlugin {
             .add_systems(
                 Update,
                 (
+                    report_navmesh_status,
                     spawn_edge_enemies,
                     snapshot_enemies,
                     enemy_ai,
@@ -86,6 +94,28 @@ fn reset_spawner(mut spawner: ResMut<EnemySpawner>) {
     *spawner = EnemySpawner::default();
 }
 
+fn report_navmesh_status(
+    mut previous_statuses: Local<HashMap<Entity, NavMeshStatus>>,
+    statuses: Query<(Entity, &NavMeshStatus), Changed<NavMeshStatus>>,
+) {
+    for (entity, status) in &statuses {
+        let previous = previous_statuses.insert(entity, *status);
+        match (previous, *status) {
+            (_, NavMeshStatus::Built) => info!("Enemy navigation mesh is ready"),
+            (_, NavMeshStatus::Failed) => {
+                warn!("Enemy navigation mesh update failed; using fallback steering")
+            }
+            (Some(NavMeshStatus::Building), NavMeshStatus::Invalid) => {
+                warn!("Enemy navigation mesh is invalid; using fallback steering")
+            }
+            (_, NavMeshStatus::Cancelled) => {
+                debug!("Enemy navigation mesh update was cancelled")
+            }
+            _ => {}
+        }
+    }
+}
+
 pub fn spawn_enemy(
     commands: &mut Commands,
     assets: &GameAssets,
@@ -96,18 +126,18 @@ pub fn spawn_enemy(
         EnemyKind::Raider => (
             Vec2::new(24.0, 36.0),
             55.0,
-            (64.0, 10.0, 210.0, 1.15, true, 520.0),
+            (64.0, 10.0, 22.0, 210.0, 1.15, true, 520.0),
             9.0,
         ),
         EnemyKind::Infected => (
             Vec2::new(24.0, 36.0),
             34.0,
-            (96.0, 12.0, 26.0, 0.7, false, 0.0),
+            (96.0, 12.0, 0.0, 26.0, 0.7, false, 0.0),
             9.0,
         ),
     };
 
-    let (speed, damage, attack_range, attack_interval, ranged, bullet_speed) = stats;
+    let (speed, damage, muzzle_offset, attack_range, attack_interval, ranged, bullet_speed) = stats;
 
     let entity = commands
         .spawn((
@@ -125,6 +155,7 @@ pub fn spawn_enemy(
                 kind,
                 speed,
                 damage,
+                muzzle_offset,
                 attack_range,
                 attack_interval,
                 attack_cooldown: fastrand::f32() * attack_interval,
@@ -135,6 +166,7 @@ pub fn spawn_enemy(
             Collider::circle(radius),
             HitFlash::default(),
             WalkAnim::default(),
+            EnemyPath::with_initial_jitter(),
             DespawnOnExit(GameState::Playing),
         ))
         .with_children(|parent| {
@@ -160,12 +192,81 @@ pub fn spawn_enemy(
         })
         .id();
 
-    spawn_health_bar(commands, entity, 26.0, 25.0, true);
+    spawn_health_bar(commands, entity, position, 26.0, 25.0, true);
     entity
 }
 
 #[derive(Component)]
 pub struct EnemyGun;
+
+#[derive(Component, Default)]
+struct EnemyPath {
+    waypoints: Vec<Vec2>,
+    next_waypoint: usize,
+    target: Vec2,
+    retry_timer: f32,
+}
+
+const PATH_REPATH_DISTANCE: f32 = 48.0;
+const PATH_RETRY_INTERVAL: f32 = 0.4;
+const WAYPOINT_REACHED_DISTANCE: f32 = 6.0;
+
+impl EnemyPath {
+    fn with_initial_jitter() -> Self {
+        Self {
+            retry_timer: fastrand::f32() * PATH_RETRY_INTERVAL,
+            ..default()
+        }
+    }
+}
+
+fn refresh_enemy_path(
+    path: &mut EnemyPath,
+    navmesh: Option<&NavMesh>,
+    start: Vec2,
+    target: Vec2,
+    dt: f32,
+) {
+    path.retry_timer = (path.retry_timer - dt).max(0.0);
+    let route_exhausted = path.next_waypoint >= path.waypoints.len();
+    let target_moved = path.target.distance_squared(target) >= PATH_REPATH_DISTANCE.powi(2);
+    if path.retry_timer > 0.0 || (!route_exhausted && !target_moved) {
+        return;
+    }
+
+    path.retry_timer = PATH_RETRY_INTERVAL;
+    path.target = target;
+    path.waypoints.clear();
+    path.next_waypoint = 0;
+
+    let Some(navmesh) = navmesh else {
+        return;
+    };
+    let Some(route) = navmesh.transformed_path(start.extend(0.0), target.extend(0.0)) else {
+        return;
+    };
+
+    path.waypoints = route
+        .path
+        .into_iter()
+        .map(|point| point.truncate())
+        .collect();
+    if path.waypoints.len() > 1 {
+        path.next_waypoint = 1;
+    }
+}
+
+fn path_direction(path: &mut EnemyPath, position: Vec2) -> Option<Vec2> {
+    while let Some(waypoint) = path.waypoints.get(path.next_waypoint).copied() {
+        let delta = waypoint - position;
+        if delta.length_squared() <= WAYPOINT_REACHED_DISTANCE.powi(2) {
+            path.next_waypoint += 1;
+        } else {
+            return Some(delta.normalize_or_zero());
+        }
+    }
+    None
+}
 
 fn frame_of(assets: &GameAssets, kind: EnemyKind, dir: usize, frame: usize) -> Handle<Image> {
     match kind {
@@ -204,6 +305,7 @@ fn spawn_edge_enemies(
         return;
     };
     let player_position = player_transform.translation.xy();
+    let alive_count = alive.iter().count();
 
     spawner.elapsed += time.delta_secs();
     spawner.timer -= time.delta_secs();
@@ -212,35 +314,37 @@ fn spawn_edge_enemies(
     let ramp = (spawner.elapsed / 90.0).clamp(0.0, 1.0);
     let interval = spawner.interval + (spawner.min_interval - spawner.interval) * ramp;
 
-    if spawner.timer > 0.0 || alive.iter().count() >= spawner.max_alive {
+    if spawner.timer > 0.0 {
+        return;
+    }
+    let batch_size = spawn_batch_size(spawner.wave_size, alive_count, spawner.max_alive);
+    if batch_size == 0 {
         return;
     }
     spawner.timer = interval;
 
-    // spawn on an edge, but never right on top of the player
-    let mut position = random_edge_point(&arena, 40.0);
-    for _ in 0..6 {
-        if position.distance(player_position) > 340.0 {
-            break;
+    for _ in 0..batch_size {
+        // Spawn on an edge, but never right on top of the player.
+        let mut position = random_edge_point(&arena, 40.0);
+        for _ in 0..6 {
+            if position.distance(player_position) > 340.0 {
+                break;
+            }
+            position = random_edge_point(&arena, 40.0);
         }
-        position = random_edge_point(&arena, 40.0);
-    }
 
-    let kind = if fastrand::f32() < 0.45 + 0.2 * ramp {
-        EnemyKind::Infected
-    } else {
-        EnemyKind::Raider
-    };
-
-    spawn_enemy(&mut commands, &assets, kind, position);
-    if fastrand::f32() < 0.35 + 0.3 * ramp {
-        let offset = Vec2::from_angle(fastrand::f32() * std::f32::consts::TAU) * 40.0;
-        let buddy = match kind {
-            EnemyKind::Raider => EnemyKind::Infected,
-            EnemyKind::Infected => EnemyKind::Infected,
+        let kind = if fastrand::f32() < 0.45 + 0.2 * ramp {
+            EnemyKind::Infected
+        } else {
+            EnemyKind::Raider
         };
-        spawn_enemy(&mut commands, &assets, buddy, position + offset);
+
+        spawn_enemy(&mut commands, &assets, kind, position);
     }
+}
+
+fn spawn_batch_size(wave_size: usize, alive_count: usize, max_alive: usize) -> usize {
+    wave_size.min(max_alive.saturating_sub(alive_count))
 }
 
 fn snapshot_enemies(
@@ -282,7 +386,19 @@ fn enemy_ai(
     arena: Res<Arena>,
     snapshot: Res<EnemySnapshot>,
     player: Query<(Entity, &Transform, &Collider), (With<Player>, Without<Enemy>)>,
-    mut enemies: Query<(Entity, &mut Transform, &mut Enemy, &mut WalkAnim, &Collider), With<Enemy>>,
+    navmeshes: Res<Assets<NavMesh>>,
+    navmesh_entities: Query<(&ManagedNavMesh, &NavMeshStatus)>,
+    mut enemies: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut Enemy,
+            &mut WalkAnim,
+            &Collider,
+            &mut EnemyPath,
+        ),
+        With<Enemy>,
+    >,
     statics: Query<(&Transform, &StaticCollider), Without<Enemy>>,
     mut static_colliders: Local<Vec<(Vec2, Collider)>>,
     mut damage: MessageWriter<Damage>,
@@ -296,6 +412,11 @@ fn enemy_ai(
     };
     let player_position = player_transform.translation.xy();
     let dt = time.delta_secs();
+    let navmesh = navmesh_entities.iter().find_map(|(managed, status)| {
+        (*status == NavMeshStatus::Built)
+            .then(|| navmeshes.get(managed))
+            .flatten()
+    });
     let list = &snapshot.list;
     static_colliders.clear();
     static_colliders.extend(
@@ -304,7 +425,7 @@ fn enemy_ai(
             .map(|(static_transform, collider)| (static_transform.translation.xy(), collider.0)),
     );
 
-    for (entity, mut transform, mut enemy, mut walk, collider) in &mut enemies {
+    for (entity, mut transform, mut enemy, mut walk, collider, mut path) in &mut enemies {
         let position = transform.translation.xy();
         let radius = collider.radius();
 
@@ -314,9 +435,16 @@ fn enemy_ai(
         let attack_distance = enemy.attack_range + player_collider.radius() + radius;
         let can_see = !line_blocked(position, player_position, &statics);
 
+        let path_direction = if center_distance > attack_distance * 0.9 {
+            refresh_enemy_path(&mut path, navmesh, position, player_position, dt);
+            path_direction(&mut path, position)
+        } else {
+            None
+        };
+
         // desired movement: close to attack range, else hold / strafe
         let mut desired = if center_distance > attack_distance * 0.9 {
-            direction * enemy.speed
+            path_direction.unwrap_or(direction) * enemy.speed
         } else if enemy.ranged && center_distance < attack_distance * 0.6 {
             -direction * enemy.speed * 0.55
         } else {
@@ -337,9 +465,10 @@ fn enemy_ai(
             }
         }
 
-        // slide along walls: if the direct path is blocked, try diagonal steers
+        // Keep the old steering fallback while the navmesh is building or if a path is unavailable.
         let mut steered = desired;
-        if desired.length_squared() > 1.0
+        if path_direction.is_none()
+            && desired.length_squared() > 1.0
             && line_blocked(position, position + desired * 0.2, &statics)
         {
             let angle = desired.y.atan2(desired.x);
@@ -434,6 +563,7 @@ fn enemy_ai(
                 face_angle,
                 enemy.damage,
                 enemy.bullet_speed,
+                enemy.muzzle_offset,
                 &mut shake,
             );
         } else {
@@ -468,12 +598,13 @@ fn fire_raider(
     angle: f32,
     damage: f32,
     speed: f32,
+    muzzle_offset: f32,
     shake: &mut ScreenShake,
 ) {
     let spread = (fastrand::f32() - 0.5) * 0.14;
     let shot_angle = angle + spread;
     let direction = Vec2::from_angle(shot_angle);
-    let muzzle = position + direction * 15.0;
+    let muzzle = position + direction * muzzle_offset;
 
     commands.spawn((
         Sprite {
@@ -543,5 +674,73 @@ fn animate_enemies(
         };
         let _ = enemy;
         gun.translation.z = 0.2;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EnemyPath, EnemySpawner, NavMesh, path_direction, spawn_batch_size};
+    use bevy::prelude::{Vec2, default};
+
+    #[test]
+    fn enemies_are_enabled_by_default() {
+        let spawner = EnemySpawner::default();
+        assert!(spawner.enabled);
+        assert_eq!(spawner.wave_size, 100);
+        assert_eq!(spawner.max_alive, 100);
+    }
+
+    #[test]
+    fn spawn_batch_fills_but_never_exceeds_the_alive_cap() {
+        assert_eq!(spawn_batch_size(100, 0, 100), 100);
+        assert_eq!(spawn_batch_size(100, 95, 100), 5);
+        assert_eq!(spawn_batch_size(100, 100, 100), 0);
+    }
+
+    #[test]
+    fn navmesh_routes_around_obstacles() {
+        let navmesh = NavMesh::from_edge_and_obstacles(
+            vec![
+                Vec2::new(-100.0, -100.0),
+                Vec2::new(100.0, -100.0),
+                Vec2::new(100.0, 100.0),
+                Vec2::new(-100.0, 100.0),
+            ],
+            vec![vec![
+                Vec2::new(-10.0, -40.0),
+                Vec2::new(10.0, -40.0),
+                Vec2::new(10.0, 40.0),
+                Vec2::new(-10.0, 40.0),
+            ]],
+        );
+
+        let route = navmesh
+            .transformed_path(
+                Vec2::new(-80.0, 0.0).extend(0.0),
+                Vec2::new(80.0, 0.0).extend(0.0),
+            )
+            .expect("a path should exist around the obstacle");
+
+        assert!(
+            route
+                .path
+                .iter()
+                .any(|point| point.y.abs() >= 40.0 - f32::EPSILON)
+        );
+    }
+
+    #[test]
+    fn path_direction_advances_to_the_next_waypoint() {
+        let mut path = EnemyPath {
+            waypoints: vec![Vec2::ZERO, Vec2::new(20.0, 0.0), Vec2::new(20.0, 20.0)],
+            next_waypoint: 1,
+            ..default()
+        };
+
+        assert_eq!(
+            path_direction(&mut path, Vec2::new(20.0, 0.0)),
+            Some(Vec2::Y)
+        );
+        assert_eq!(path.next_waypoint, 2);
     }
 }

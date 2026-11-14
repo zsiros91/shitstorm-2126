@@ -37,6 +37,8 @@ pub struct GameAssets {
     pub counter: Handle<Image>,
     pub dead_trees: [Handle<Image>; 2],
     pub debris_piles: [Handle<Image>; 2],
+    pub turret: Handle<Image>,
+    pub turret_head: Handle<Image>,
 
     // characters -------------------------------------------------------
     pub player_body: [[Handle<Image>; 2]; 4],
@@ -170,6 +172,8 @@ impl FromWorld for GameAssets {
                 load("sprites/debris_pile_1.png"),
                 load("sprites/debris_pile_2.png"),
             ],
+            turret: load("sprites/turret.png"),
+            turret_head: load("sprites/turret_head.png"),
 
             player_body: [
                 [

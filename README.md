@@ -22,6 +22,7 @@ executable. A packaged build therefore needs `assets/` beside the binary.
 | Mouse wheel | Zoom in / out |
 | Left mouse | Fire |
 | R | Reload |
+| T | Place a turret |
 | Esc | Pause |
 | Q | Quit (while paused) |
 
@@ -61,9 +62,17 @@ file when reporting a problem.
 
 ## Development
 
-- `cargo test` runs the collision unit tests.
+- `cargo test` runs the game and collision unit tests.
 - F1 toggles the collider overlay; F12 saves a screenshot.
 - Environment flags used by the capture harness:
   `SHITSTORM_AUTOSTART`, `SHITSTORM_DEMO_INPUT`, `SHITSTORM_SCREENSHOT`,
   `SHITSTORM_SCREENSHOT_DELAY`.
 - `tools/gen_assets.py` regenerates every sprite procedurally (Pillow).
+
+## Enemy navigation
+
+Enemies use a navmesh generated from the arena bounds and static colliders.
+When adding map geometry, tag blocking entities with `NavigationObstacle` and
+provide a matching `PrimitiveObstacle`; enemy movement still uses the existing
+collision and line-of-sight systems, with fallback steering while the navmesh
+builds or when a route is unavailable.

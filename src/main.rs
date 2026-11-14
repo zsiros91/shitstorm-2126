@@ -12,6 +12,7 @@ mod healthbar;
 mod logfile;
 mod player;
 mod states;
+mod turret;
 mod ui;
 mod weapon;
 
@@ -20,7 +21,10 @@ use bevy::prelude::*;
 use bevy::render::RenderPlugin;
 use bevy::render::settings::{Backends, WgpuSettings};
 use bevy::window::{MonitorSelection, WindowMode, WindowResolution};
+use vleue_navigator::VleueNavigatorPlugin;
+use vleue_navigator::prelude::{NavmeshUpdaterPlugin, PrimitiveObstacle};
 
+use crate::arena::NavigationObstacle;
 use crate::states::{GameSet, GameState, Paused};
 
 /// Resolve the asset directory. A plain `cargo run` puts the binary in `target/debug`,
@@ -84,6 +88,10 @@ fn main() {
         )
         .init_state::<GameState>()
         .init_resource::<Paused>()
+        .add_plugins((
+            VleueNavigatorPlugin,
+            NavmeshUpdaterPlugin::<PrimitiveObstacle, NavigationObstacle>::default(),
+        ))
         .configure_sets(
             Update,
             (
@@ -108,6 +116,7 @@ fn main() {
             weapon::WeaponPlugin,
             enemy::EnemyPlugin,
             combat::CombatPlugin,
+            turret::TurretPlugin,
             ui::UiPlugin,
             debug::DebugPlugin,
         ))

@@ -1,0 +1,134 @@
+metadata:
+  generated: "2026-11-13"
+  source_spec: "conversation: user request and confirmed decisions; requirements are first-pass"
+  target_plan: "docs/online-coop/plan.md"
+
+summary:
+  total_requirements: 7
+  covered_requirements: 7
+  missing_requirements: 0
+  coverage_percentage: 100.0
+
+requirements:
+  - req_id: "REQ-001"
+    req_description: "Host-authoritative sessions support two player slots."
+    priority: "P1"
+    plan_mapping:
+      phase: "Phase-1/Phase-2/Phase-3"
+      phase_name: "Foundations, session, and gameplay"
+      items:
+        - item_id: "1.1"
+          description: "Add transport and protocol foundations"
+        - item_id: "1.2"
+          description: "Add network roles and stable identities"
+        - item_id: "2.1"
+          description: "Implement direct-IP session lifecycle"
+        - item_id: "3.1"
+          description: "Make gameplay systems multi-player and host-authoritative"
+    notes: "Two players maximum for v1."
+  - req_id: "REQ-002"
+    req_description: "A guest joins a host by direct IP and UDP port."
+    priority: "P1"
+    plan_mapping:
+      phase: "Phase-1/Phase-2/Phase-4/Phase-5"
+      phase_name: "Protocol, session, UX, and validation"
+      items:
+        - item_id: "1.1"
+          description: "Add transport and protocol foundations"
+        - item_id: "2.1"
+          description: "Implement direct-IP session lifecycle"
+        - item_id: "4.1"
+          description: "Add host/join and per-player presentation"
+        - item_id: "5.2"
+          description: "Validate real direct-IP play"
+    notes: "No relay or NAT traversal in v1."
+  - req_id: "REQ-003"
+    req_description: "Each peer controls only its assigned player with independent input."
+    priority: "P1"
+    plan_mapping:
+      phase: "Phase-1/Phase-2/Phase-3/Phase-4"
+      phase_name: "Identity, input, gameplay, and presentation"
+      items:
+        - item_id: "1.2"
+          description: "Add network roles and stable identities"
+        - item_id: "2.2"
+          description: "Route independent player input"
+        - item_id: "3.1"
+          description: "Make gameplay systems multi-player and host-authoritative"
+        - item_id: "4.1"
+          description: "Add host/join and per-player presentation"
+    notes: ""
+  - req_id: "REQ-004"
+    req_description: "The host owns gameplay simulation and clients render replicated state."
+    priority: "P1"
+    plan_mapping:
+      phase: "Phase-1/Phase-3"
+      phase_name: "Foundations and authoritative gameplay"
+      items:
+        - item_id: "1.2"
+          description: "Add network roles and stable identities"
+        - item_id: "3.1"
+          description: "Make gameplay systems multi-player and host-authoritative"
+        - item_id: "3.3"
+          description: "Replicate the host's gameplay state"
+        - item_id: "3.4"
+          description: "Smooth client-side presentation"
+    notes: ""
+  - req_id: "REQ-005"
+    req_description: "Both players participate in enemy targeting and host-confirmed combat."
+    priority: "P1"
+    plan_mapping:
+      phase: "Phase-3"
+      phase_name: "Shared authoritative run"
+      items:
+        - item_id: "3.2"
+          description: "Target and spawn around both players"
+        - item_id: "3.3"
+          description: "Replicate the host's gameplay state"
+        - item_id: "3.4"
+          description: "Smooth client-side presentation"
+    notes: ""
+  - req_id: "REQ-006"
+    req_description: "Host/join status and disconnect outcomes are visible and defined."
+    priority: "P1"
+    plan_mapping:
+      phase: "Phase-2/Phase-4/Phase-5"
+      phase_name: "Session, UX, and validation"
+      items:
+        - item_id: "2.1"
+          description: "Implement direct-IP session lifecycle"
+        - item_id: "4.1"
+          description: "Add host/join and per-player presentation"
+        - item_id: "4.2"
+          description: "Handle disconnects and invalid traffic"
+        - item_id: "5.2"
+          description: "Validate real direct-IP play"
+    notes: ""
+  - req_id: "REQ-007"
+    req_description: "Protocol, authority, disconnect, and end-to-end session behavior are tested."
+    priority: "P1"
+    plan_mapping:
+      phase: "Phase-1/Phase-3/Phase-4/Phase-5"
+      phase_name: "Protocol, replication, resilience, and validation"
+      items:
+        - item_id: "1.1"
+          description: "Add transport and protocol foundations"
+        - item_id: "3.3"
+          description: "Replicate the host's gameplay state"
+        - item_id: "4.2"
+          description: "Handle disconnects and invalid traffic"
+        - item_id: "5.1"
+          description: "Add network and gameplay regression tests"
+        - item_id: "5.2"
+          description: "Validate real direct-IP play"
+    notes: ""
+
+missing_requirements: []
+orphan_plan_items: []
+
+validation:
+  passed: true
+  errors: []
+  warnings:
+    - "Requirements were derived from the conversation because no formal feature spec exists."
+    - "No project constitution was found; verify constraints if one is added."
